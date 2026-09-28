@@ -74,6 +74,7 @@ export class MpvPlayerProcess {
         const args = [
             'mpv', 
             '--title=LiveLockScreen',
+            '--stop-screensaver=no',
             `--input-ipc-server=${this._socketPath}`, 
             this._videoPath,
             '--no-config',
@@ -336,9 +337,10 @@ export class MpvPlayerProcess {
         
         // This may be hacky but it works :)
         // If you have better ideas please contact me
+        const pos = this._position ?? 0;
         const filterStr = direction === 'in'
-            ? `@fade:lavfi=[afade=t=in:st=${this._position}:d=${FADE_DURATION_MS}ms:curve=tri:silence=${currentGain}]`
-            : `@fade:lavfi=[afade=t=out:st=${this._position}:d=${FADE_DURATION_MS}ms:curve=tri:unity=${currentGain}]`;
+            ? `@fade:lavfi=[afade=t=in:st=${pos}:d=${FADE_DURATION_MS}ms:curve=tri:silence=${currentGain}]`
+            : `@fade:lavfi=[afade=t=out:st=${pos}:d=${FADE_DURATION_MS}ms:curve=tri:unity=${currentGain}]`;
 
         this._queueCommand('af', 'set', filterStr);
 

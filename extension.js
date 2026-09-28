@@ -5,6 +5,7 @@ import {Extension, InjectionManager} from 'resource:///org/gnome/shell/extension
 
 import St from 'gi://St';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
@@ -29,6 +30,39 @@ export default class LockscreenExtension extends Extension {
     enable() {
         this._resetLockState();
         this._settings = this.getSettings();
+        this._injectionManager = new InjectionManager();
+
+        // Turn off any lightbox overlay that may already be active or queued
+        Main.screenShield._shortLightbox?.lightOff();
+        Main.screenShield._longLightbox?.lightOff();
+
+        // Suppress instant 300ms fade-to-black on manual lock so the video is visible
+        this._injectionManager.overrideMethod(
+            Main.screenShield,
+            '_resetLockScreen',
+            original => {
+                return function(params) {
+                    const modified = params ? {...params, fadeToBlack: false} : params;
+                    return original.call(this, modified);
+                };
+            }
+        );
+
+        // Intercept _activateFade: prevent _shortLightbox from darkening the screen
+        // on manual lock, but still notify GNOME that the shield is active
+        this._injectionManager.overrideMethod(
+            Main.screenShield,
+            '_activateFade',
+            original => {
+                return function(lightbox, time) {
+                    if (lightbox === this._shortLightbox) {
+                        this._setActive(true);
+                        return;
+                    }
+                    return original.call(this, lightbox, time);
+                };
+            }
+        );
 
         //NOTE: Global error handler w/ cleanup
         this._setupLock().catch(err => {
@@ -51,6 +85,7 @@ export default class LockscreenExtension extends Extension {
         this._injectRetryId = 0;
         this._injectAttempts = 0;
         this._blurEffectTimeoutId = 0;
+        this._dbusSubId = 0;
     }
 
     async _setupLock() {
@@ -135,8 +170,11 @@ export default class LockscreenExtension extends Extension {
             brightness: this._blurBrightness,
         };
 
+        // Clear any black lightbox overlay that may have been triggered
+        Main.screenShield._shortLightbox?.lightOff();
+        Main.screenShield._longLightbox?.lightOff();
+
         // Temporarily hide all animations for windows
-        this._injectionManager = new InjectionManager();
         this._injectionManager.overrideMethod(
             Main.wm,
             '_shouldAnimateActor',
@@ -422,6 +460,7 @@ export default class LockscreenExtension extends Extension {
 
         if (!this._backgroundCreated && isLastMonitor) {
             this._initLoginManager();
+            this._initScreenBlankWatcher();
             this._startAnimation();
             this._player.play();
 
@@ -494,11 +533,76 @@ export default class LockscreenExtension extends Extension {
         this._loginManager.connectObject('prepare-for-sleep', (_manager, aboutToSleep) => {
             if (!this._player) return;
 
-            if (aboutToSleep)
-                this._player.pauseImmediately()
-            else if (!aboutToSleep && !this._promptShown)
-                this._player.play();
+            if (aboutToSleep) {
+                this._player.pauseImmediately();
+            } else {
+                if (!this._promptShown) {
+                    this._player.play();
+                    // Additional kick in case GPU/DRM compositor pipeline took a moment to resume
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                        if (this._player && !this._promptShown)
+                            this._player.play();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
+            }
         }, this);
+    }
+
+    _initScreenBlankWatcher() {
+        // Resume playback when the screen shield wakes up (e.g. key press, mouse move, or wake from suspend)
+        Main.screenShield.connectObject(
+            'wake-up-screen', () => {
+                if (!this._player) return;
+                if (!this._promptShown)
+                    this._player.play();
+            },
+            this
+        );
+
+        // Pause when longLightbox fades to black on idle, resume when it turns off
+        Main.screenShield._longLightbox?.connectObject(
+            'notify::active', lightbox => {
+                if (!this._player) return;
+                if (lightbox.active)
+                    this._player.pauseImmediately();
+                else if (!this._promptShown)
+                    this._player.play();
+            },
+            this
+        );
+
+        // Track display power saving state (DPMS on/off) via Mutter DBus interface.
+        // PowerSaveMode: 0 = on, 1 = standby, 2 = suspend, 3 = off.
+        try {
+            this._dbusSubId = Gio.DBus.session.signal_subscribe(
+                'org.gnome.Mutter.DisplayConfig',
+                'org.freedesktop.DBus.Properties',
+                'PropertiesChanged',
+                '/org/gnome/Mutter/DisplayConfig',
+                null,
+                Gio.DBusSignalFlags.NONE,
+                (_conn, _sender, _path, _iface, _signal, parameters) => {
+                    if (!this._player) return;
+                    try {
+                        const [iface, changed] = parameters.deep_unpack();
+                        if (iface === 'org.gnome.Mutter.DisplayConfig' && 'PowerSaveMode' in changed) {
+                            const mode = changed['PowerSaveMode'];
+                            if (mode === 0) {
+                                if (!this._promptShown)
+                                    this._player.play();
+                            } else {
+                                this._player.pauseImmediately();
+                            }
+                        }
+                    } catch (err) {
+                        logWarn(`Error parsing PowerSaveMode signal: ${err}`);
+                    }
+                }
+            );
+        } catch (e) {
+            logWarn(`Failed to subscribe to DisplayConfig PowerSaveMode: ${e}`);
+        }
     }
 
     disable() {
@@ -540,14 +644,24 @@ export default class LockscreenExtension extends Extension {
         this._injectionManager = null;
 
         this._loginManager?.disconnectObject(this);
+        Main.screenShield.disconnectObject(this);
+        Main.screenShield._longLightbox?.disconnectObject(this);
+        Main.screenShield._shortLightbox?.disconnectObject(this);
+
+        if (this._dbusSubId) {
+            try {
+                Gio.DBus.session.signal_unsubscribe(this._dbusSubId);
+            } catch (_) {}
+            this._dbusSubId = 0;
+        }
 
         Object.values(this._wrapperActors).forEach(actor => {
             actor.disconnectObject(this);
             actor.remove_effect_by_name('lockscreen-extension-blur');
             actor.remove_effect_by_name('lockscreen-extension-desaturate');
-            actor.destroy()
-        })
-        this._wrapperActors = {};
+            actor.destroy();
+        });
+        this._wrapperActors = [];
         this._settings = null;
     }
 }
