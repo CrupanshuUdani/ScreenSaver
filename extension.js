@@ -23,7 +23,7 @@ import { isGtk4PaintableSinkAvailable, isMpvAvailable } from './utils/check_depe
 import { sendErrorNotification } from './utils/notifications.js';
 
 const MAX_DIALOG_INJECT_ATTEMPTS = 100;
-const DIALOG_INJECT_INTERVAL = 100;
+const DIALOG_INJECT_INTERVAL = 20;
 const WINDOW_TIMEOUT = 10000;
 
 export default class LockscreenExtension extends Extension {
@@ -32,9 +32,41 @@ export default class LockscreenExtension extends Extension {
         this._settings = this.getSettings();
         this._injectionManager = new InjectionManager();
 
-        // Turn off any lightbox overlay that may already be active or queued
-        Main.screenShield._shortLightbox?.lightOff();
-        Main.screenShield._longLightbox?.lightOff();
+        // Completely neutralize _shortLightbox so it can never fade the screen to black
+        this._origShortLightOn = null;
+        this._origLongLightOn = null;
+
+        const shortLightbox = Main.screenShield._shortLightbox;
+        if (shortLightbox) {
+            shortLightbox.remove_all_transitions();
+            shortLightbox.opacity = 0;
+            shortLightbox.hide();
+
+            this._origShortLightOn = shortLightbox.lightOn;
+            shortLightbox.lightOn = function(fadeInTime) {
+                logInfo('LiveLockScreen: suppressed _shortLightbox.lightOn');
+                this.remove_all_transitions();
+                this.opacity = 0;
+                this.hide();
+                this._active = true;
+                this.notify('active');
+            };
+        }
+
+        const longLightbox = Main.screenShield._longLightbox;
+        if (longLightbox) {
+            longLightbox.remove_all_transitions();
+            longLightbox.opacity = 0;
+            longLightbox.hide();
+
+            this._origLongLightOn = longLightbox.lightOn;
+            longLightbox.lightOn = function(fadeInTime) {
+                logInfo('LiveLockScreen: suppressed _longLightbox.lightOn');
+                this.remove_all_transitions();
+                this.opacity = 0;
+                this.hide();
+            };
+        }
 
         // Suppress instant 300ms fade-to-black on manual lock so the video is visible
         this._injectionManager.overrideMethod(
@@ -57,6 +89,9 @@ export default class LockscreenExtension extends Extension {
                 return function(lightbox, time) {
                     if (lightbox === this._shortLightbox) {
                         this._setActive(true);
+                        return;
+                    }
+                    if (lightbox === this._longLightbox) {
                         return;
                     }
                     return original.call(this, lightbox, time);
@@ -554,20 +589,14 @@ export default class LockscreenExtension extends Extension {
         Main.screenShield.connectObject(
             'wake-up-screen', () => {
                 if (!this._player) return;
-                if (!this._promptShown)
+                if (!this._promptShown) {
                     this._player.play();
-            },
-            this
-        );
-
-        // Pause when longLightbox fades to black on idle, resume when it turns off
-        Main.screenShield._longLightbox?.connectObject(
-            'notify::active', lightbox => {
-                if (!this._player) return;
-                if (lightbox.active)
-                    this._player.pauseImmediately();
-                else if (!this._promptShown)
-                    this._player.play();
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                        if (this._player && !this._promptShown)
+                            this._player.play();
+                        return GLib.SOURCE_REMOVE;
+                    });
+                }
             },
             this
         );
@@ -588,9 +617,16 @@ export default class LockscreenExtension extends Extension {
                         const [iface, changed] = parameters.deep_unpack();
                         if (iface === 'org.gnome.Mutter.DisplayConfig' && 'PowerSaveMode' in changed) {
                             const mode = changed['PowerSaveMode'];
+                            logInfo(`LiveLockScreen: PowerSaveMode changed to ${mode}`);
                             if (mode === 0) {
-                                if (!this._promptShown)
+                                if (!this._promptShown) {
                                     this._player.play();
+                                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                                        if (this._player && !this._promptShown)
+                                            this._player.play();
+                                        return GLib.SOURCE_REMOVE;
+                                    });
+                                }
                             } else {
                                 this._player.pauseImmediately();
                             }
@@ -642,6 +678,15 @@ export default class LockscreenExtension extends Extension {
 
         this._injectionManager?.clear();
         this._injectionManager = null;
+
+        if (this._origShortLightOn && Main.screenShield._shortLightbox) {
+            Main.screenShield._shortLightbox.lightOn = this._origShortLightOn;
+            this._origShortLightOn = null;
+        }
+        if (this._origLongLightOn && Main.screenShield._longLightbox) {
+            Main.screenShield._longLightbox.lightOn = this._origLongLightOn;
+            this._origLongLightOn = null;
+        }
 
         this._loginManager?.disconnectObject(this);
         Main.screenShield.disconnectObject(this);

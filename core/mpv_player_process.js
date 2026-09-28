@@ -74,6 +74,7 @@ export class MpvPlayerProcess {
         const args = [
             'mpv', 
             '--title=LiveLockScreen',
+            '--pause=yes',
             '--stop-screensaver=no',
             `--input-ipc-server=${this._socketPath}`, 
             this._videoPath,
@@ -244,21 +245,22 @@ export class MpvPlayerProcess {
     }
 
     async _startReadLoop() {
+        const decoder = new TextDecoder();
         while (!this._shuttingDown) {
             let line;
             try {
-                [line] = await this._ipcInStream.read_line_async(GLib.PRIORITY_DEFAULT, null);
+                const [bytes] = await this._ipcInStream.read_line_async(GLib.PRIORITY_DEFAULT, null);
+                if (bytes === null) {
+                    logErrorMpv('ipc connection closed by mpv (EOF)');
+                    if (this._proc)
+                        this._reconnectIpc();
+                    return;
+                }
+                line = decoder.decode(bytes);
             } catch (e) {
                 if (this._shuttingDown) return;
                 logErrorMpv(`ipc read error: ${e}`);
                 this._reconnectIpc();
-                return;
-            }
-
-            if (line === null) {
-                logErrorMpv('ipc connection closed by mpv (EOF)');
-                if (this._proc)
-                    this._reconnectIpc();
                 return;
             }
 
@@ -279,11 +281,12 @@ export class MpvPlayerProcess {
                 this._position = data.data;
             }
 
-            //NOTE: Once the file is loaded send command to pause it and retrieve video size
+            // Retrieve video params on initial load
             if (data.event == "file-loaded") {
-                this._queueCommand('observe_property', 1, 'playback-time');
-                this._queueCommand('set_property', 'pause', 'yes');
-                this._queueCommand('get_property', 'video-params');
+                if (this.w === 0) {
+                    this._queueCommand('observe_property', 1, 'playback-time');
+                    this._queueCommand('get_property', 'video-params');
+                }
             }
         } catch(err) {
             logWarnMpv(`failed to handle "${line}". Reason: ${err}`)
