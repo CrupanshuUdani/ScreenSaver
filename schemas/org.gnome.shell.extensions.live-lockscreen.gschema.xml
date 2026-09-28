@@ -4,6 +4,10 @@
             <default>false</default>
             <summary>Whether to disable the extension when on battery</summary>
         </key>
+        <key name="general-show-video-on-lock" type="b">
+            <default>true</default>
+            <summary>Whether to show video immediately on manual lock instead of fading to black</summary>
+        </key>
         <key name="background-video-path" type="s">
             <default>""</default>
             <summary>Path to background video</summary>
