@@ -26,7 +26,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildVolumeRow());
         group.add(this._buildLoopRow());
         group.add(this._buildBatteryRow());
-        group.add(this._buildShowVideoOnLockRow());
         this.add(group);
     }
 
@@ -98,15 +97,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
     _buildBatteryRow() {
         const row = new Adw.SwitchRow({ title: 'Disable on battery' });
         this._settings.bind(Keys.DISABLE_ON_BATTERY, row, 'active', Gio.SettingsBindFlags.DEFAULT);
-        return row;
-    }
-
-    _buildShowVideoOnLockRow() {
-        const row = new Adw.SwitchRow({
-            title: 'Show video immediately on lock',
-            subtitle: 'Play video right away instead of fading to black on Super + L',
-        });
-        this._settings.bind(Keys.SHOW_VIDEO_ON_LOCK, row, 'active', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 

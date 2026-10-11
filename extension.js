@@ -30,104 +30,6 @@ export default class LockscreenExtension extends Extension {
     enable() {
         this._resetLockState();
         this._settings = this.getSettings();
-        this._injectionManager = new InjectionManager();
-
-        const showVideoOnLock = this._settings.get_boolean(Keys.SHOW_VIDEO_ON_LOCK);
-
-        if (showVideoOnLock) {
-            // Immediately neutralize lightboxes so they never draw black over the screen
-            const shortLightbox = Main.screenShield._shortLightbox;
-            if (shortLightbox) {
-                shortLightbox.remove_all_transitions();
-                shortLightbox.opacity = 0;
-                shortLightbox.hide();
-
-                this._injectionManager.overrideMethod(
-                    shortLightbox,
-                    'lightOn',
-                    _original => {
-                        return function(_fadeInTime) {
-                            this.remove_all_transitions();
-                            this.opacity = 0;
-                            this.hide();
-                        };
-                    }
-                );
-            }
-
-            const longLightbox = Main.screenShield._longLightbox;
-            if (longLightbox) {
-                longLightbox.remove_all_transitions();
-                longLightbox.opacity = 0;
-                longLightbox.hide();
-
-                this._injectionManager.overrideMethod(
-                    longLightbox,
-                    'lightOn',
-                    _original => {
-                        return function(_fadeInTime) {
-                            this.remove_all_transitions();
-                            this.opacity = 0;
-                            this.hide();
-                        };
-                    }
-                );
-            }
-
-            // Intercept _activateFade: keep lightboxes hidden and avoid calling _setActive(true)
-            // prematurely which triggers gsd-power to blank the screen.
-            this._injectionManager.overrideMethod(
-                Main.screenShield,
-                '_activateFade',
-                original => {
-                    return function(lightbox, time) {
-                        if (lightbox === this._shortLightbox || lightbox === this._longLightbox) {
-                            lightbox.remove_all_transitions();
-                            lightbox.opacity = 0;
-                            lightbox.hide();
-
-                            if (this._becameActiveId === 0) {
-                                this._becameActiveId = this.idleMonitor.add_user_active_watch(
-                                    this._onUserBecameActive.bind(this)
-                                );
-                            }
-                            return;
-                        }
-                        return original.call(this, lightbox, time);
-                    };
-                }
-            );
-
-            // Suppress instant 300ms fade-to-black on manual lock so the video is visible
-            this._injectionManager.overrideMethod(
-                Main.screenShield,
-                '_resetLockScreen',
-                original => {
-                    return function(params) {
-                        const modified = params ? {...params, fadeToBlack: false} : params;
-                        return original.call(this, modified);
-                    };
-                }
-            );
-        }
-
-        // Ensure user activity resumes playback
-        this._injectionManager.overrideMethod(
-            Main.screenShield,
-            '_onUserBecameActive',
-            original => {
-                const self = this;
-                return function() {
-                    original.call(this);
-                    if (self._player) {
-                        const shouldPlay = !self._promptShown || !self._promptSettings?.[Keys.PROMPT_PAUSE];
-                        if (shouldPlay) {
-                            self._player.play();
-                        }
-                    }
-                };
-            }
-        );
 
         //NOTE: Global error handler w/ cleanup
         this._setupLock().catch(err => {
@@ -235,21 +137,8 @@ export default class LockscreenExtension extends Extension {
             brightness: this._blurBrightness,
         };
 
-        // Clear any black lightbox overlay that may have been triggered
-        if (this._settings.get_boolean(Keys.SHOW_VIDEO_ON_LOCK)) {
-            if (Main.screenShield._shortLightbox) {
-                Main.screenShield._shortLightbox.remove_all_transitions();
-                Main.screenShield._shortLightbox.opacity = 0;
-                Main.screenShield._shortLightbox.hide();
-            }
-            if (Main.screenShield._longLightbox) {
-                Main.screenShield._longLightbox.remove_all_transitions();
-                Main.screenShield._longLightbox.opacity = 0;
-                Main.screenShield._longLightbox.hide();
-            }
-        }
-
         // Temporarily hide all animations for windows
+        this._injectionManager = new InjectionManager();
         this._injectionManager.overrideMethod(
             Main.wm,
             '_shouldAnimateActor',
@@ -728,8 +617,6 @@ export default class LockscreenExtension extends Extension {
 
         this._loginManager?.disconnectObject(this);
         Main.screenShield.disconnectObject(this);
-        Main.screenShield._longLightbox?.disconnectObject(this);
-        Main.screenShield._shortLightbox?.disconnectObject(this);
 
         if (this._dbusSubId) {
             try {
