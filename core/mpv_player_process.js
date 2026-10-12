@@ -74,6 +74,8 @@ export class MpvPlayerProcess {
         const args = [
             'mpv', 
             '--title=LiveLockScreen',
+            '--pause=yes',
+            '--stop-screensaver=no',
             `--input-ipc-server=${this._socketPath}`, 
             this._videoPath,
             '--no-config',
@@ -243,21 +245,22 @@ export class MpvPlayerProcess {
     }
 
     async _startReadLoop() {
+        const decoder = new TextDecoder();
         while (!this._shuttingDown) {
             let line;
             try {
-                [line] = await this._ipcInStream.read_line_async(GLib.PRIORITY_DEFAULT, null);
+                const [bytes] = await this._ipcInStream.read_line_async(GLib.PRIORITY_DEFAULT, null);
+                if (bytes === null) {
+                    logErrorMpv('ipc connection closed by mpv (EOF)');
+                    if (this._proc)
+                        this._reconnectIpc();
+                    return;
+                }
+                line = decoder.decode(bytes);
             } catch (e) {
                 if (this._shuttingDown) return;
                 logErrorMpv(`ipc read error: ${e}`);
                 this._reconnectIpc();
-                return;
-            }
-
-            if (line === null) {
-                logErrorMpv('ipc connection closed by mpv (EOF)');
-                if (this._proc)
-                    this._reconnectIpc();
                 return;
             }
 
@@ -278,10 +281,9 @@ export class MpvPlayerProcess {
                 this._position = data.data;
             }
 
-            //NOTE: Once the file is loaded send command to pause it and retrieve video size
+            // Retrieve video params on initial load
             if (data.event == "file-loaded") {
                 this._queueCommand('observe_property', 1, 'playback-time');
-                this._queueCommand('set_property', 'pause', 'yes');
                 this._queueCommand('get_property', 'video-params');
             }
         } catch(err) {
@@ -336,9 +338,10 @@ export class MpvPlayerProcess {
         
         // This may be hacky but it works :)
         // If you have better ideas please contact me
+        const pos = this._position ?? 0;
         const filterStr = direction === 'in'
-            ? `@fade:lavfi=[afade=t=in:st=${this._position}:d=${FADE_DURATION_MS}ms:curve=tri:silence=${currentGain}]`
-            : `@fade:lavfi=[afade=t=out:st=${this._position}:d=${FADE_DURATION_MS}ms:curve=tri:unity=${currentGain}]`;
+            ? `@fade:lavfi=[afade=t=in:st=${pos}:d=${FADE_DURATION_MS}ms:curve=tri:silence=${currentGain}]`
+            : `@fade:lavfi=[afade=t=out:st=${pos}:d=${FADE_DURATION_MS}ms:curve=tri:unity=${currentGain}]`;
 
         this._queueCommand('af', 'set', filterStr);
 

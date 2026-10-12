@@ -5,6 +5,7 @@ import {Extension, InjectionManager} from 'resource:///org/gnome/shell/extension
 
 import St from 'gi://St';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
@@ -51,6 +52,7 @@ export default class LockscreenExtension extends Extension {
         this._injectRetryId = 0;
         this._injectAttempts = 0;
         this._blurEffectTimeoutId = 0;
+        this._dbusSubId = 0;
     }
 
     async _setupLock() {
@@ -422,6 +424,7 @@ export default class LockscreenExtension extends Extension {
 
         if (!this._backgroundCreated && isLastMonitor) {
             this._initLoginManager();
+            this._initScreenBlankWatcher();
             this._startAnimation();
             this._player.play();
 
@@ -429,6 +432,7 @@ export default class LockscreenExtension extends Extension {
         }
     }
 
+    //TODO: Move into utils
     _applyScaling(cloneActor, targetW, targetH) {
         const W = this._player.w;
         const H = this._player.h;
@@ -489,16 +493,58 @@ export default class LockscreenExtension extends Extension {
         }));
     }
 
+    _resumePlayback() {
+        const shouldPlay = !this._promptShown || !this._promptSettings?.[Keys.PROMPT_PAUSE];
+        if (shouldPlay) {
+            this._player.play();
+            // Additional kick in case GPU/DRM compositor pipeline took a moment to resume
+            // NOTE: Seems like an overkill. Commented out for now
+            //GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+            //    if (this._player && (!this._promptShown || !this._promptSettings?.[Keys.PROMPT_PAUSE]))
+            //        this._player.play();
+            //    return GLib.SOURCE_REMOVE;
+            //});
+        }
+    }
+
     _initLoginManager() {
         this._loginManager = LoginManager.getLoginManager();
         this._loginManager.connectObject('prepare-for-sleep', (_manager, aboutToSleep) => {
             if (!this._player) return;
 
-            if (aboutToSleep)
-                this._player.pauseImmediately()
-            else if (!aboutToSleep && !this._promptShown)
-                this._player.play();
+            if (aboutToSleep) {
+                this._player.pauseImmediately();
+            } else {
+                this._resumePlayback();
+            }
         }, this);
+    }
+
+    _initScreenBlankWatcher() {
+        // Track display power saving state (DPMS on/off) via Mutter DBus interface.
+        // PowerSaveMode: 0 = on, 1 = standby, 2 = suspend, 3 = off.
+        this._dbusSubId = Gio.DBus.session.signal_subscribe(
+            'org.gnome.Mutter.DisplayConfig',
+            'org.freedesktop.DBus.Properties',
+            'PropertiesChanged',
+            '/org/gnome/Mutter/DisplayConfig',
+            null,
+            Gio.DBusSignalFlags.NONE,
+            (_conn, _sender, _path, _iface, _signal, parameters) => {
+                if (!this._player) return;
+                const [_, changed] = parameters.deep_unpack();
+                if (!'PowerSaveMode' in changed) return;
+
+                let rawMode = changed['PowerSaveMode'].deep_unpack();
+                const mode = Number(rawMode);
+                logInfo(`PowerSaveMode changed to ${mode}`);
+                
+                if (mode === 0)
+                    this._resumePlayback();
+                else
+                    this._player.pause();
+            }
+        );
     }
 
     disable() {
@@ -541,13 +587,20 @@ export default class LockscreenExtension extends Extension {
 
         this._loginManager?.disconnectObject(this);
 
+        if (this._dbusSubId) {
+            try {
+                Gio.DBus.session.signal_unsubscribe(this._dbusSubId);
+            } catch (_) {}
+            this._dbusSubId = 0;
+        }
+
         Object.values(this._wrapperActors).forEach(actor => {
             actor.disconnectObject(this);
             actor.remove_effect_by_name('lockscreen-extension-blur');
             actor.remove_effect_by_name('lockscreen-extension-desaturate');
-            actor.destroy()
-        })
-        this._wrapperActors = {};
+            actor.destroy();
+        });
+        this._wrapperActors = [];
         this._settings = null;
     }
 }
