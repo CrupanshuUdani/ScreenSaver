@@ -10,15 +10,16 @@ import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
-import { Keys, ScalingMode } from './enums.js';
+import { Keys } from './enums.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
 import { GstPlayerProcess } from './core/gst_player_process.js';
 
+import { applyScaling } from './utils/actors.js';
 import { isOnBattery } from './utils/battery.js';
 import { SHELL_VERSION } from './utils/shell_version.js';
 import { logInfo, logWarn, logError } from './utils/logging.js';
 import { sleep, destroySleeps } from './utils/base.js';
-
+import { getPowerSaveMode } from './utils/dbus.js';
 import { isGtk4PaintableSinkAvailable, isMpvAvailable } from './utils/check_dependencies.js';
 import { sendErrorNotification } from './utils/notifications.js';
 
@@ -40,6 +41,8 @@ export default class LockscreenExtension extends Extension {
 
     _resetLockState() {
         this._backgroundCreated = false;
+        this._animationPlayed = false;
+
         this._wrapperActors = [];
         this._windowActor = null;
         this._window = null;
@@ -113,7 +116,9 @@ export default class LockscreenExtension extends Extension {
     }
 
     async _onPlayerInit() {
-        this._fadeInDuration  = this._settings.get_int(Keys.FADE_IN_DURATION);
+        this._pauseOnBlank = this._settings.get_boolean(Keys.PAUSE_ON_BLANK);
+
+        this._fadeInDuration = this._settings.get_int(Keys.FADE_IN_DURATION);
         this._scalingMode = this._settings.get_int(Keys.SCALING_MODE);
         this._blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
         this._blurBrightness = this._settings.get_double(Keys.BLUR_BRIGHTNESS);
@@ -369,8 +374,7 @@ export default class LockscreenExtension extends Extension {
             })
         }
 
-        if (this._promptSettings[Keys.PROMPT_PAUSE])
-            this._player?.play();
+        this._resumePlayback();
     }
 
     _handleMonitor(monitorIndex) {
@@ -420,72 +424,36 @@ export default class LockscreenExtension extends Extension {
         wrapper.set_size(monitor.width, monitor.height);
         wrapper.set_clip_to_allocation(true);
         
-        this._applyScaling(cloneActor, monitor.width, monitor.height);
+        applyScaling(
+            cloneActor, 
+            this._scalingMode,
+            this._player.w, this._player.h,
+            monitor.width, monitor.height
+        );
 
         if (!this._backgroundCreated && isLastMonitor) {
             this._initLoginManager();
-            this._initScreenBlankWatcher();
-            this._startAnimation();
-            this._player.play();
+
+            if (this._pauseOnBlank) {
+                // Watch blank state when PAUSE_ON_BLANK is enabled
+                this._initScreenBlankWatcher();
+                // If the screen is blank dont start the playback and animation
+                getPowerSaveMode().then((state) => {
+                    if (state == 0) this._onScreenOn();
+                })
+            // Start video and animation immediately 
+            } else {
+                this._onScreenOn();
+            }
 
             this._backgroundCreated = true;
         }
     }
 
-    //TODO: Move into utils
-    _applyScaling(cloneActor, targetW, targetH) {
-        const W = this._player.w;
-        const H = this._player.h;
-
-        // Keep the clone at native source size always; scaling is done via
-        // set_scale() (transform-based) rather than set_size()
-
-        // since set_size()-based scaling triggers a GNOME 48 repaint bug where
-        // the clone's box only partially updates when scaled up from a smaller
-        // source.set_scale() does not hit this bug.
-        cloneActor.set_size(W, H);
-
-        switch (this._scalingMode) {
-            case ScalingMode.STRETCH: {
-                // Fill the box exactly, ignore aspect ratio
-                const scaleX = targetW / W;
-                const scaleY = targetH / H;
-
-                cloneActor.set_scale(scaleX, scaleY);
-                cloneActor.set_position(0, 0);
-                break;
-            }
-
-            case ScalingMode.FIT: {
-                // Preserve aspect ratio, letterboxed to fit entirely within the box
-                const scale = Math.min(targetW / W, targetH / H);
-                const w = W * scale;
-                const h = H * scale;
-
-                cloneActor.set_scale(scale, scale);
-                cloneActor.set_position(
-                    (targetW - w) / 2,
-                    (targetH - h) / 2
-                );
-                break;
-            }
-            default: {
-                // Preserve aspect ratio, scale up to fully cover the box, crop overflow
-                const scale = Math.max(targetW / W, targetH / H);
-                const w = W * scale;
-                const h = H * scale;
-
-                cloneActor.set_scale(scale, scale);
-                cloneActor.set_position(
-                    (targetW - w) / 2,
-                    (targetH - h) / 2
-                );
-                break;
-            }
-        }
-    }
-
     _startAnimation() {
+        if (this._animationPlayed) return;
+        this._animationPlayed = true;
+
         this._wrapperActors.forEach(actor => actor.ease({
             opacity: 255,
             duration: this._fadeInDuration,
@@ -507,6 +475,11 @@ export default class LockscreenExtension extends Extension {
         }
     }
 
+    _onScreenOn() {
+        this._startAnimation();
+        this._resumePlayback();
+    }
+
     _initLoginManager() {
         this._loginManager = LoginManager.getLoginManager();
         this._loginManager.connectObject('prepare-for-sleep', (_manager, aboutToSleep) => {
@@ -515,7 +488,7 @@ export default class LockscreenExtension extends Extension {
             if (aboutToSleep) {
                 this._player.pauseImmediately();
             } else {
-                this._resumePlayback();
+                this._onScreenOn();
             }
         }, this);
     }
@@ -540,7 +513,7 @@ export default class LockscreenExtension extends Extension {
                 logInfo(`PowerSaveMode changed to ${mode}`);
                 
                 if (mode === 0)
-                    this._resumePlayback();
+                    this._onScreenOn();
                 else
                     this._player.pause();
             }
@@ -588,9 +561,7 @@ export default class LockscreenExtension extends Extension {
         this._loginManager?.disconnectObject(this);
 
         if (this._dbusSubId) {
-            try {
-                Gio.DBus.session.signal_unsubscribe(this._dbusSubId);
-            } catch (_) {}
+            Gio.DBus.session.signal_unsubscribe(this._dbusSubId);
             this._dbusSubId = 0;
         }
 

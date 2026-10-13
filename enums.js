@@ -1,5 +1,6 @@
 export const Keys = {
     DISABLE_ON_BATTERY: "general-disable-on-battery",
+    PAUSE_ON_BLANK: "general-pause-on-blank",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",

@@ -4,6 +4,11 @@
             <default>false</default>
             <summary>Whether to disable the extension when on battery</summary>
         </key>
+        <key name="general-pause-on-blank" type="b">
+            <default>true</default>
+            <summary>Whether to pause the video when the screen goes black</summary>
+        </key>
+
         <key name="background-video-path" type="s">
             <default>""</default>
             <summary>Path to background video</summary>
