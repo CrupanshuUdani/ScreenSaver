@@ -533,7 +533,7 @@ export default class LockscreenExtension extends Extension {
             (_conn, _sender, _path, _iface, _signal, parameters) => {
                 if (!this._player) return;
                 const [_, changed] = parameters.deep_unpack();
-                if (!'PowerSaveMode' in changed) return;
+                if (!('PowerSaveMode' in changed)) return;
 
                 let rawMode = changed['PowerSaveMode'].deep_unpack();
                 const mode = Number(rawMode);
