@@ -151,9 +151,14 @@ export class MpvPlayerProcess {
                 return;
 
             if (file.query_exists(null)) {
-                await this._connectIpc(socketPath);
-                this._startReadLoop().catch(err => logErrorMpv(`read loop crashed: ${err}`));
-                return;
+                try {
+                    await this._connectIpc(socketPath);
+                    this._startReadLoop().catch(err => logErrorMpv(`read loop crashed: ${err}`));
+                    return;
+                } catch (e) {
+                    logWarnMpv(`socket exists but IPC connection failed: ${e}`);
+                    this._removeSocketFile();
+                }
             }
 
             await sleep(50);
@@ -244,7 +249,11 @@ export class MpvPlayerProcess {
 
     _handleIpcLine(line) {
         try {
-            const data = JSON.parse(line);
+            const text = typeof line === 'string'
+                ? line
+                : new TextDecoder('utf-8', { fatal: false }).decode(line);
+
+            const data = JSON.parse(text);
 
             if (data.data && data.data.w && data.data.h) {
                 this.w = data.data.w;
@@ -259,7 +268,7 @@ export class MpvPlayerProcess {
                 this._queueCommand('get_property', 'video-params');
             }
         } catch (err) {
-            logWarnMpv(`failed to handle "${line}". Reason: ${err}`);
+            logWarnMpv(`failed to handle "${typeof line === 'string' ? line : String(line)}". Reason: ${err}`);
         }
     }
 
@@ -343,10 +352,10 @@ export class MpvPlayerProcess {
             this._pid = null;
         }
 
-        if (this._window) {
-            this._window.kill();
-            this._window = null;
-        }
+        // Do not call MetaWindow.kill() here. Mutter owns the lifecycle of the
+        // lock-screen window actor, and killing it directly can crash the compositor
+        // while the unlock flow is tearing down the screen.
+        this._window = null;
 
         this._removeSocketFile();
     }

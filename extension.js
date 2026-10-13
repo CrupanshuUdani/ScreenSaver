@@ -292,17 +292,16 @@ export default class ScreenSaverExtension extends Extension {
         if (swipeTracker) {
             const gtype = swipeTracker.constructor?.$gtype;
             if (gtype) {
-                const swipeSignalId = GObject.signal_lookup('end', gtype);
-                if (swipeSignalId)
-                    swipeTracker.disconnect(swipeSignalId);
-
-                swipeTracker.connectObject('end', (...args) => {
-                    dialog._swipeEnd(...args);
-                    if (dialog._activePage === dialog._clock)
-                        this._onPromptHide();
-                    else
-                        this._onPromptShow();
-                }, this);
+                if (!dialog._screenSaverSwipeConnected) {
+                    swipeTracker.connectObject('end', (...args) => {
+                        dialog._swipeEnd(...args);
+                        if (dialog._activePage === dialog._clock)
+                            this._onPromptHide();
+                        else
+                            this._onPromptShow();
+                    }, this);
+                    dialog._screenSaverSwipeConnected = true;
+                }
             } else {
                 logWarn('Lock screen swipe tracker is missing GType; continuing without swipe hook');
             }
@@ -512,11 +511,12 @@ export default class ScreenSaverExtension extends Extension {
         Main.screenShield?._dialog?._swipeTracker?.disconnectObject(this);
 
         if (this._windowActor) {
+            // Mutter owns the lifecycle of this actor; destroying it here can crash the
+            // compositor when the lock screen is tearing down during unlock.
             const parent = this._windowActor.get_parent();
             if (parent)
                 parent.remove_child(this._windowActor);
             this._windowActor.hide();
-            this._windowActor.destroy();
             this._windowActor = null;
         }
         this._window = null;
