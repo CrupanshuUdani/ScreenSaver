@@ -11,7 +11,7 @@
 
 # ScreenSaver
 
-Current release: v1.0.3
+Current release: v1.0.5
 
 A GNOME Shell extension that rotates images as your lock screen background.
 
@@ -110,6 +110,16 @@ Adjust `--image-display-duration=10` if you want to test a different slide durat
 - ScreenSaver uses mpv only.
 - The selected folder itself is scanned, not just its subfolders.
 - If only one supported image is found, mpv will keep showing that image and loop it when looping is enabled.
+
+## Version notes
+
+### v1.0.5
+
+- Fixed a compositor crash during unlock caused by destroying Mutter-owned window actors while the lock screen was tearing down.
+- Removed direct MetaWindow kills from the player teardown path to avoid triggering Wayland compositor instability.
+- Kept cleanup limited to extension-owned wrapper actors and cleared stale references so the unlock flow does not leave dangling handles behind.
+- Hardened mpv IPC handling to avoid stale socket state and incorrect Uint8Array-to-string parsing during lock-screen startup.
+- Prevented duplicate swipe signal connections and improved startup recovery when a stale `/tmp/screensaver-mpv.sock` file is present.
 
 ## Thank you
 
