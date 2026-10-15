@@ -375,6 +375,11 @@ export class MpvPlayerProcess {
         });
     }
 
+    stopImmediately() {
+        this.pauseImmediately();
+        this._queueCommand('seek', 0, 'absolute+exact');
+    }
+
     pauseImmediately() {
         this._clearTransitionTimeout();
         this._queueCommand('set_property', 'pause', 'yes');

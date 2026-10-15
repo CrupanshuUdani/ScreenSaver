@@ -109,6 +109,14 @@ export class GstPlayerProcess {
         this._sendCommand('pause');
     }
 
+    stopImmediately() {
+        this._sendCommand('stop');
+    }
+
+    pauseImmediately() {
+        this._sendCommand('pause');
+    }
+
     _sendCommand(command) {
         if (!this._stdin) return;
         try {

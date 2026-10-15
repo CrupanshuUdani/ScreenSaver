@@ -26,7 +26,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildVolumeRow());
         group.add(this._buildLoopRow());
         group.add(this._buildBatteryRow());
-        group.add(this._buildPauseOnBlankRow());
+        group.add(this._buildActionOnBlankRow());
         group.add(this._buildInfoLabel());
         this.add(group);
     }
@@ -101,12 +101,13 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         return row;
     }
 
-    _buildPauseOnBlankRow() {
-        const row = new Adw.SwitchRow({
-            title: 'Pause on blank',
-            subtitle: 'Pause playback when the screen goes black',
+    _buildActionOnBlankRow() {
+        const row = new Adw.ComboRow({
+            title: 'Action on blank',
+            subtitle: 'What to do with the video when the screen goes black',
+            model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video']),
         });
-        this._settings.bind(Keys.PAUSE_ON_BLANK, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        this._settings.bind(Keys.ACTION_ON_BLANK, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 

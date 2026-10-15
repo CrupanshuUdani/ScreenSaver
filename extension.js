@@ -10,7 +10,7 @@ import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
-import { Direction, Keys } from './enums.js';
+import { Direction, Keys, ActionOnBlank } from './enums.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
 import { GstPlayerProcess } from './core/gst_player_process.js';
 
@@ -124,7 +124,7 @@ export default class LockscreenExtension extends Extension {
      * TODO: This function is way too overloaded. Split into smaller
      */
     async _onPlayerInit() {
-        this._pauseOnBlank = this._settings.get_boolean(Keys.PAUSE_ON_BLANK);
+        this._actionOnBlank = this._settings.get_int(Keys.ACTION_ON_BLANK);
         this._fadeInDuration = this._settings.get_int(Keys.FADE_IN_DURATION);
         this._scalingMode = this._settings.get_int(Keys.SCALING_MODE);
         this._blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
@@ -434,8 +434,7 @@ export default class LockscreenExtension extends Extension {
         if (!this._backgroundCreated && isLastMonitor) {
             this._initLoginManager();
 
-            if (this._pauseOnBlank) {
-                // Watch blank state when PAUSE_ON_BLANK is enabled
+            if (this._actionOnBlank != ActionOnBlank.IGNORE) {
                 this._initScreenBlankWatcher();
                 // If the screen is blank dont start the playback and animation
                 getPowerSaveMode().then((state) => {
@@ -475,7 +474,10 @@ export default class LockscreenExtension extends Extension {
             if (!this._player) return;
 
             if (aboutToSleep) {
-                this._player.pauseImmediately();
+                if (this._actionOnBlank == ActionOnBlank.RESTART)
+                    this._player.stopImmediately();
+                else
+                    this._player.pauseImmediately();
             } else {
                 this._onScreenOn();
             }
@@ -505,8 +507,12 @@ export default class LockscreenExtension extends Extension {
                     this._onScreenOn();
                 }
                 else {
+                    if (this._actionOnBlank == ActionOnBlank.RESTART)
+                        this._player.stopImmediately();
+                    else if (this._actionOnBlank == ActionOnBlank.PAUSE)
+                        this._player.pause();
+
                     this._fadeAnim?.pause();
-                    this._player.pause();
                 }
             }
         );

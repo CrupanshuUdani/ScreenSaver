@@ -1,6 +1,6 @@
 export const Keys = {
     DISABLE_ON_BATTERY: "general-disable-on-battery",
-    PAUSE_ON_BLANK: "general-pause-on-blank",
+    ACTION_ON_BLANK: "general-action-on-blank",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",
@@ -32,6 +32,12 @@ export const ScalingMode = {
     FIT: 1,
     COVER: 2,
 };
+
+export const ActionOnBlank = {
+    IGNORE: 0,
+    PAUSE: 1,
+    RESTART: 2,
+}
 
 /**
  * Playback direction for ActorAnimator
