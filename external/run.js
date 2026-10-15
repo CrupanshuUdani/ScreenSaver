@@ -1,5 +1,5 @@
 #!/usr/bin/env -S gjs -m
-/* 
+/** 
  * This script runs multiple GTK windows with video output
  * one per each monitor
 */

@@ -3,7 +3,9 @@ import GLib from 'gi://GLib';
 
 Gio._promisify(Gio.DBusConnection.prototype, 'call', 'call_finish');
 
-// PowerSaveMode: 0 = on, 1 = standby, 2 = suspend, 3 = off.
+/**
+ * PowerSaveMode: 0 = on, 1 = standby, 2 = suspend, 3 = off.
+ */
 export async function getPowerSaveMode() {
     try {
         const result = await Gio.DBus.session.call(
