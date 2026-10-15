@@ -32,3 +32,12 @@ export const ScalingMode = {
     FIT: 1,
     COVER: 2,
 };
+
+/**
+ * Playback direction for ActorAnimator
+ * Matches Clutter.TimelineDirection.* values 
+ */
+export const Direction = Object.freeze({
+    BACKWARD: 1,
+    FORWARD: 0,
+});
