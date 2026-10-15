@@ -60,7 +60,6 @@ export default class LockscreenExtension extends Extension {
 
         this._injectRetryId = 0;
         this._injectAttempts = 0;
-        this._blurEffectTimeoutId = 0;
         this._dbusSubId = 0;
     }
 
@@ -348,21 +347,22 @@ export default class LockscreenExtension extends Extension {
         if (this._promptShown) return;
         this._promptShown = true;
 
-        this._blurRadiusAnim?.play(Direction.FORWARD);
-        this._blurBrightnessAnim?.play(Direction.FORWARD);
+        //NOTE: Adding small delay to prevent stuttering of video
+        this._blurRadiusAnim?.play(Direction.FORWARD, 5);
+        this._blurBrightnessAnim?.play(Direction.FORWARD, 5);
         this._grayscaleAnim?.play(Direction.FORWARD);
 
         if (this._promptSettings[Keys.PROMPT_PAUSE])
             this._player?.pause();
-            
     }
 
     _onPromptHide() {
         if (!this._promptShown) return;
         this._promptShown = false;
 
-        this._blurRadiusAnim?.play(Direction.BACKWARD);
-        this._blurBrightnessAnim?.play(Direction.BACKWARD);
+        //NOTE: Adding small delay to prevent stuttering of video
+        this._blurRadiusAnim?.play(Direction.BACKWARD, 5);
+        this._blurBrightnessAnim?.play(Direction.BACKWARD, 5);
         this._grayscaleAnim?.play(Direction.BACKWARD);
 
         this._resumePlayback();
@@ -527,10 +527,6 @@ export default class LockscreenExtension extends Extension {
         if (this._injectRetryId) {
             GLib.source_remove(this._injectRetryId);
             this._injectRetryId = 0;
-        }
-        if (this._blurEffectTimeoutId) {
-            GLib.source_remove(this._blurEffectTimeoutId);
-            this._blurEffectTimeoutId = 0;
         }
         this._injectAttempts = 0;
 

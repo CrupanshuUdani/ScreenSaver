@@ -49,14 +49,17 @@ export class ActorAnimator {
      * Starts (or continues) the animation from the current position.
      * @param {number} [direction] Direction.FORWARD or Direction.BACKWARD.
      *     Without an argument, continues in the last used direction.
+     * @param {number} [delay] the delay before the start of animation in ms.
+     *      Default: 0ms
      */
-    play(direction = this._direction) {
+    play(direction = this._direction, delay=0) {
         this._direction = direction;
         this._playing = true;
 
         for (const {transition} of this._entries) {
             transition.pause();
             this._place(transition);
+            transition.set_delay(delay);
             transition.start();
         }
     }
