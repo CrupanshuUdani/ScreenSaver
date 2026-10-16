@@ -1,3 +1,5 @@
+import GObject from 'gi://GObject';
+
 const _timeoutIds = new Set();
 
 export function sleep(ms) {
@@ -10,10 +12,19 @@ export function sleep(ms) {
     });
 }
 
-//NOTE: Must be called in disable()
+/**
+ * NOTE: Must be called in disable()
+ */
 export function destroySleeps() {
     for (const id of _timeoutIds) {
         clearTimeout(id);
     }
     _timeoutIds.clear();
 }
+
+export function toDouble(n) {
+    const v = new GObject.Value();
+    v.init(GObject.TYPE_DOUBLE);
+    v.set_double(n);
+    return v;
+};

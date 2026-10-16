@@ -5,21 +5,25 @@ import {Extension, InjectionManager} from 'resource:///org/gnome/shell/extension
 
 import St from 'gi://St';
 import GLib from 'gi://GLib';
+import Gio from 'gi://Gio';
 import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
-import { Keys, ScalingMode } from './enums.js';
+import { Direction, Keys, ActionOnBlank } from './enums.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
 import { GstPlayerProcess } from './core/gst_player_process.js';
 
+import { applyScaling } from './utils/actors.js';
 import { isOnBattery } from './utils/battery.js';
 import { SHELL_VERSION } from './utils/shell_version.js';
 import { logInfo, logWarn, logError } from './utils/logging.js';
 import { sleep, destroySleeps } from './utils/base.js';
-
+import { getPowerSaveMode } from './utils/dbus.js';
 import { isGtk4PaintableSinkAvailable, isMpvAvailable } from './utils/check_dependencies.js';
 import { sendErrorNotification } from './utils/notifications.js';
+
+import { ActorAnimator } from './helpers/actor_animator.js';
 
 const MAX_DIALOG_INJECT_ATTEMPTS = 100;
 const DIALOG_INJECT_INTERVAL = 100;
@@ -38,7 +42,13 @@ export default class LockscreenExtension extends Extension {
     }
 
     _resetLockState() {
+        this._fadeAnim = null;
+        this._grayscaleAnim = null;
+        this._blurRadiusAnim = null;
+        this._blurBrightnessAnim = null;
+
         this._backgroundCreated = false;
+
         this._wrapperActors = [];
         this._windowActor = null;
         this._window = null;
@@ -50,7 +60,7 @@ export default class LockscreenExtension extends Extension {
 
         this._injectRetryId = 0;
         this._injectAttempts = 0;
-        this._blurEffectTimeoutId = 0;
+        this._dbusSubId = 0;
     }
 
     async _setupLock() {
@@ -110,8 +120,12 @@ export default class LockscreenExtension extends Extension {
         await this._onPlayerInit();
     }
 
+    /**
+     * TODO: This function is way too overloaded. Split into smaller
+     */
     async _onPlayerInit() {
-        this._fadeInDuration  = this._settings.get_int(Keys.FADE_IN_DURATION);
+        this._actionOnBlank = this._settings.get_int(Keys.ACTION_ON_BLANK);
+        this._fadeInDuration = this._settings.get_int(Keys.FADE_IN_DURATION);
         this._scalingMode = this._settings.get_int(Keys.SCALING_MODE);
         this._blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
         this._blurBrightness = this._settings.get_double(Keys.BLUR_BRIGHTNESS);
@@ -128,27 +142,17 @@ export default class LockscreenExtension extends Extension {
 
         const themeContext = St.ThemeContext.get_for_stage(global.stage);
         this._blurRadius  *= themeContext.scale_factor;
-
         this._blurEffect = {
             name: 'lockscreen-extension-blur',
             radius: this._blurRadius,
             brightness: this._blurBrightness,
         };
 
-        // Temporarily hide all animations for windows
+        this._initAnimators();
+
         this._injectionManager = new InjectionManager();
-        this._injectionManager.overrideMethod(
-            Main.wm,
-            '_shouldAnimateActor',
-            (original) => {
-                return function(actor, types) {
-                    return false;
-                };
-            }
-        );
 
         const win = await this._player.waitForWindow(WINDOW_TIMEOUT); 
-
         this._window = win
         this._windowActor = win.get_compositor_private();
 
@@ -174,6 +178,47 @@ export default class LockscreenExtension extends Extension {
         this._windowActor.opacity = 0;
 
         await this._injectIntoDialog();
+    }
+
+    _initAnimators() {
+        const dstRadius = this._promptSettings[Keys.PROMPT_BLUR_RADIUS];
+        const dstBrightness = dstRadius ? this._promptSettings[Keys.PROMPT_BLUR_BRIGHTNESS] : 1;
+
+        const srcRadius = this._blurRadius;
+        const srcBrightness = srcRadius ? this._blurBrightness : 1;
+
+        if (this._fadeInDuration > 0)
+            this._fadeAnim = new ActorAnimator({
+                actors: [],
+                property: 'opacity',
+                from: 0,
+                to: 255,
+                duration: this._fadeInDuration
+            });
+        if (this._promptSettings[Keys.PROMPT_GRAYSCALE])
+            this._grayscaleAnim = new ActorAnimator({
+                actors: [],
+                property: '@effects.lockscreen-extension-desaturate.factor',
+                from: 0,
+                to: 1,
+                duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION]
+            });
+        if (this._promptSettings[Keys.PROMPT_CHANGE_BLUR]) {
+            this._blurRadiusAnim = new ActorAnimator({
+                actors: [],
+                property: '@effects.lockscreen-extension-blur.radius',
+                from: parseFloat(srcRadius),
+                to: parseFloat(dstRadius),
+                duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION]
+            });
+            this._blurBrightnessAnim = new ActorAnimator({
+                actors: [],
+                property: '@effects.lockscreen-extension-blur.brightness',
+                from: parseFloat(srcBrightness),
+                to: parseFloat(dstBrightness),
+                duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION]
+            });
+        }
     }
 
     _resetWindowActor() {
@@ -282,7 +327,6 @@ export default class LockscreenExtension extends Extension {
         // I'll be honest, I have no idea if this works or not
         // I dont have a fingerprint scanner to test
         // But it should :) 
-
         const authPrompt = dialog._authPrompt;
         if (!authPrompt) {
             logWarn('AuthPrompt not available, fingerprint detection skipped');
@@ -303,72 +347,25 @@ export default class LockscreenExtension extends Extension {
         if (this._promptShown) return;
         this._promptShown = true;
 
-        if (this._promptSettings[Keys.PROMPT_CHANGE_BLUR]) {
-            const radius = this._promptSettings[Keys.PROMPT_BLUR_RADIUS];
-            const brightness = radius ? this._promptSettings[Keys.PROMPT_BLUR_BRIGHTNESS] : 1;
-
-            // Adding a slight timeout helps get rid of video stutters
-            this._blurEffectTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 10, () => {
-                this._wrapperActors.forEach(actor => {
-                    actor.ease_property('@effects.lockscreen-extension-blur.radius', radius, {
-                        duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION],
-                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                    });
-                    actor.ease_property('@effects.lockscreen-extension-blur.brightness', brightness, {
-                        duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION],
-                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                    });
-                })
-
-                return GLib.SOURCE_REMOVE;
-            });
-        }
-
-        if (this._promptSettings[Keys.PROMPT_GRAYSCALE]) {
-            this._wrapperActors.forEach(actor => {
-                actor.ease_property('@effects.lockscreen-extension-desaturate.factor', 1.0, {
-                    duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION],
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                });
-            })
-        }
+        //NOTE: Adding small delay to prevent stuttering of video
+        this._blurRadiusAnim?.play(Direction.FORWARD, 5);
+        this._blurBrightnessAnim?.play(Direction.FORWARD, 5);
+        this._grayscaleAnim?.play(Direction.FORWARD);
 
         if (this._promptSettings[Keys.PROMPT_PAUSE])
             this._player?.pause();
-            
     }
 
     _onPromptHide() {
         if (!this._promptShown) return;
         this._promptShown = false;
 
-        if (this._promptSettings[Keys.PROMPT_CHANGE_BLUR]) {
-            const radius = this._blurRadius;
-            const brightness = radius ? this._blurBrightness : 1;
+        //NOTE: Adding small delay to prevent stuttering of video
+        this._blurRadiusAnim?.play(Direction.BACKWARD, 5);
+        this._blurBrightnessAnim?.play(Direction.BACKWARD, 5);
+        this._grayscaleAnim?.play(Direction.BACKWARD);
 
-            this._wrapperActors.forEach(actor => {
-                actor.ease_property('@effects.lockscreen-extension-blur.radius', radius, {
-                    duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION],
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                });
-                actor.ease_property('@effects.lockscreen-extension-blur.brightness', brightness, {
-                    duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION],
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                });
-            });
-        }
-
-        if (this._promptSettings[Keys.PROMPT_GRAYSCALE]) {
-            this._wrapperActors.forEach(actor => {
-                actor.ease_property('@effects.lockscreen-extension-desaturate.factor', 0.0, {
-                    duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION],
-                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                });
-            })
-        }
-
-        if (this._promptSettings[Keys.PROMPT_PAUSE])
-            this._player?.play();
+        this._resumePlayback();
     }
 
     _handleMonitor(monitorIndex) {
@@ -397,17 +394,19 @@ export default class LockscreenExtension extends Extension {
             source: this._windowActor
         });
 
+        this._blurEffect.radius = this._blurRadiusAnim?.get_value() || this._blurRadius;
+        this._blurEffect.brightness = this._blurBrightnessAnim?.get_value() || this._blurBrightness;
         wrapper.add_effect(new Shell.BlurEffect(this._blurEffect));
 
         // Adding color desaturation effect if needed
         if (this._promptSettings[Keys.PROMPT_GRAYSCALE]) {
             wrapper.add_effect_with_name(
                 'lockscreen-extension-desaturate',
-                new Clutter.DesaturateEffect({ factor: 0.0 })
+                new Clutter.DesaturateEffect({ factor: this._grayscaleAnim?.get_value() || 0.0 })
             );
         }
 
-        if (!this._backgroundCreated)
+        if (!this._backgroundCreated && this._fadeInDuration > 0)
             wrapper.opacity = 0;
 
         wrapper.add_child(cloneActor);
@@ -418,75 +417,55 @@ export default class LockscreenExtension extends Extension {
         wrapper.set_size(monitor.width, monitor.height);
         wrapper.set_clip_to_allocation(true);
         
-        this._applyScaling(cloneActor, monitor.width, monitor.height);
+        applyScaling(
+            cloneActor, 
+            this._scalingMode,
+            this._player.w, this._player.h,
+            monitor.width, monitor.height
+        );
+
+        if (isLastMonitor) {
+            this._fadeAnim?.rebind(this._wrapperActors);
+            this._grayscaleAnim?.rebind(this._wrapperActors);
+            this._blurRadiusAnim?.rebind(this._wrapperActors);
+            this._blurBrightnessAnim?.rebind(this._wrapperActors);
+        }
 
         if (!this._backgroundCreated && isLastMonitor) {
             this._initLoginManager();
-            this._startAnimation();
-            this._player.play();
+
+            if (this._actionOnBlank != ActionOnBlank.IGNORE) {
+                this._initScreenBlankWatcher();
+                // If the screen is blank dont start the playback and animation
+                getPowerSaveMode().then((state) => {
+                    if (state == 0) this._onScreenOn();
+                })
+            // Start video and animation immediately 
+            } else {
+                this._onScreenOn();
+            }
 
             this._backgroundCreated = true;
         }
     }
 
-    _applyScaling(cloneActor, targetW, targetH) {
-        const W = this._player.w;
-        const H = this._player.h;
-
-        // Keep the clone at native source size always; scaling is done via
-        // set_scale() (transform-based) rather than set_size()
-
-        // since set_size()-based scaling triggers a GNOME 48 repaint bug where
-        // the clone's box only partially updates when scaled up from a smaller
-        // source.set_scale() does not hit this bug.
-        cloneActor.set_size(W, H);
-
-        switch (this._scalingMode) {
-            case ScalingMode.STRETCH: {
-                // Fill the box exactly, ignore aspect ratio
-                const scaleX = targetW / W;
-                const scaleY = targetH / H;
-
-                cloneActor.set_scale(scaleX, scaleY);
-                cloneActor.set_position(0, 0);
-                break;
-            }
-
-            case ScalingMode.FIT: {
-                // Preserve aspect ratio, letterboxed to fit entirely within the box
-                const scale = Math.min(targetW / W, targetH / H);
-                const w = W * scale;
-                const h = H * scale;
-
-                cloneActor.set_scale(scale, scale);
-                cloneActor.set_position(
-                    (targetW - w) / 2,
-                    (targetH - h) / 2
-                );
-                break;
-            }
-            default: {
-                // Preserve aspect ratio, scale up to fully cover the box, crop overflow
-                const scale = Math.max(targetW / W, targetH / H);
-                const w = W * scale;
-                const h = H * scale;
-
-                cloneActor.set_scale(scale, scale);
-                cloneActor.set_position(
-                    (targetW - w) / 2,
-                    (targetH - h) / 2
-                );
-                break;
-            }
+    _resumePlayback() {
+        const shouldPlay = !this._promptShown || !this._promptSettings?.[Keys.PROMPT_PAUSE];
+        if (shouldPlay) {
+            this._player.play();
+            // Additional kick in case GPU/DRM compositor pipeline took a moment to resume
+            // NOTE: Seems like an overkill. Commented out for now
+            //GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+            //    if (this._player && (!this._promptShown || !this._promptSettings?.[Keys.PROMPT_PAUSE]))
+            //        this._player.play();
+            //    return GLib.SOURCE_REMOVE;
+            //});
         }
     }
 
-    _startAnimation() {
-        this._wrapperActors.forEach(actor => actor.ease({
-            opacity: 255,
-            duration: this._fadeInDuration,
-            mode: Clutter.AnimationMode.EASE_IN_QUAD,
-        }));
+    _onScreenOn() {
+        this._fadeAnim?.play();
+        this._resumePlayback();
     }
 
     _initLoginManager() {
@@ -494,27 +473,66 @@ export default class LockscreenExtension extends Extension {
         this._loginManager.connectObject('prepare-for-sleep', (_manager, aboutToSleep) => {
             if (!this._player) return;
 
-            if (aboutToSleep)
-                this._player.pauseImmediately()
-            else if (!aboutToSleep && !this._promptShown)
-                this._player.play();
+            if (aboutToSleep) {
+                if (this._actionOnBlank == ActionOnBlank.RESTART)
+                    this._player.stopImmediately();
+                else
+                    this._player.pauseImmediately();
+            } else {
+                this._onScreenOn();
+            }
         }, this);
     }
 
+    _initScreenBlankWatcher() {
+        // Track display power saving state (DPMS on/off) via Mutter DBus interface.
+        // PowerSaveMode: 0 = on, 1 = standby, 2 = suspend, 3 = off.
+        this._dbusSubId = Gio.DBus.session.signal_subscribe(
+            'org.gnome.Mutter.DisplayConfig',
+            'org.freedesktop.DBus.Properties',
+            'PropertiesChanged',
+            '/org/gnome/Mutter/DisplayConfig',
+            null,
+            Gio.DBusSignalFlags.NONE,
+            (_conn, _sender, _path, _iface, _signal, parameters) => {
+                if (!this._player) return;
+                const [_, changed] = parameters.deep_unpack();
+                if (!('PowerSaveMode' in changed)) return;
+
+                let rawMode = changed['PowerSaveMode'].deep_unpack();
+                const mode = Number(rawMode);
+                logInfo(`PowerSaveMode changed to ${mode}`);
+                
+                if (mode === 0) {
+                    this._onScreenOn();
+                }
+                else {
+                    if (this._actionOnBlank == ActionOnBlank.RESTART)
+                        this._player.stopImmediately();
+                    else if (this._actionOnBlank == ActionOnBlank.PAUSE)
+                        this._player.pause();
+
+                    this._fadeAnim?.pause();
+                }
+            }
+        );
+    }
+
+    /**
+     * User unlocked the screen. 
+     * Stopping the videoplayblack and cleaning everything up
+    */
     disable() {
-        /* 
-         * User unlocked the screen. 
-         * Stopping the videoplayblack and cleaning everything up
-        */
         destroySleeps();
+
+        this._fadeAnim?.destroy();
+        this._blurBrightnessAnim?.destroy();
+        this._blurRadiusAnim?.destroy();
+        this._grayscaleAnim?.destroy();
 
         if (this._injectRetryId) {
             GLib.source_remove(this._injectRetryId);
             this._injectRetryId = 0;
-        }
-        if (this._blurEffectTimeoutId) {
-            GLib.source_remove(this._blurEffectTimeoutId);
-            this._blurEffectTimeoutId = 0;
         }
         this._injectAttempts = 0;
 
@@ -541,13 +559,18 @@ export default class LockscreenExtension extends Extension {
 
         this._loginManager?.disconnectObject(this);
 
+        if (this._dbusSubId) {
+            Gio.DBus.session.signal_unsubscribe(this._dbusSubId);
+            this._dbusSubId = 0;
+        }
+
         Object.values(this._wrapperActors).forEach(actor => {
             actor.disconnectObject(this);
             actor.remove_effect_by_name('lockscreen-extension-blur');
             actor.remove_effect_by_name('lockscreen-extension-desaturate');
-            actor.destroy()
-        })
-        this._wrapperActors = {};
+            actor.destroy();
+        });
+        this._wrapperActors = [];
         this._settings = null;
     }
 }

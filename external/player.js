@@ -139,6 +139,7 @@ export default class PlayerMulti {
         this._commands = new CommandHandler();
         this._commands.addHandler('play',  () => this._pipeline.play());
         this._commands.addHandler('pause', () => this._pipeline.pause());
+        this._commands.addHandler('stop',  () => this._pipeline.stop());
         this._commands.addHandler('quit',  () => this._quit());
         this._commands.init();
     }

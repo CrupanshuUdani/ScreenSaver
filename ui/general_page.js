@@ -26,6 +26,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildVolumeRow());
         group.add(this._buildLoopRow());
         group.add(this._buildBatteryRow());
+        group.add(this._buildActionOnBlankRow());
+        group.add(this._buildInfoLabel());
         this.add(group);
     }
 
@@ -37,8 +39,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             subtitle:
                 `Install MPV for better reliability and continued support.\n\n` +
                 `If you run into issues with MPV, please report them. ` +
-                `You can force GStreamer playback in debug settings in the meantime.\n\n` +
-                `More info in README.md.`,
+                `You can force GStreamer playback in debug settings in the meantime.`,
             icon_name: 'dialog-warning-symbolic',
         });
         row.add_css_class('warning');
@@ -100,6 +101,16 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         return row;
     }
 
+    _buildActionOnBlankRow() {
+        const row = new Adw.ComboRow({
+            title: 'Action on blank',
+            subtitle: 'What to do with the video when the screen goes black',
+            model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video']),
+        });
+        this._settings.bind(Keys.ACTION_ON_BLANK, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
     _buildPathRow() {
         const path = this._settings.get_string(Keys.VIDEO_PATH);
 
@@ -119,6 +130,21 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         row.connect('activated', () => this._openFileDialog(row));
 
         return row;
+    }
+
+    _buildInfoLabel() {
+        return new Gtk.Label({
+            label: 'To keep the screen from blanking, use the ' +
+                   '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
+                   'Unblank lock screen</a> extension.',
+            use_markup: true,
+            css_classes: ['dim-label', 'caption'],
+            wrap: true,
+            xalign: 0,
+            margin_top: 6,
+            margin_start: 12,
+            margin_end: 12,
+        });
     }
 
     _openFileDialog(row) {

@@ -1,5 +1,6 @@
 export const Keys = {
     DISABLE_ON_BATTERY: "general-disable-on-battery",
+    ACTION_ON_BLANK: "general-action-on-blank",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",
@@ -31,3 +32,18 @@ export const ScalingMode = {
     FIT: 1,
     COVER: 2,
 };
+
+export const ActionOnBlank = {
+    IGNORE: 0,
+    PAUSE: 1,
+    RESTART: 2,
+}
+
+/**
+ * Playback direction for ActorAnimator
+ * Matches Clutter.TimelineDirection.* values 
+ */
+export const Direction = Object.freeze({
+    BACKWARD: 1,
+    FORWARD: 0,
+});

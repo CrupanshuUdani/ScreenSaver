@@ -250,6 +250,15 @@ export default class Pipeline {
         );
     }
 
+    stop() {
+        this._pipeline.set_state(Gst.State.PAUSED);
+        this._pipeline.seek_simple(
+            Gst.Format.TIME,
+            Gst.SeekFlags.FLUSH | Gst.SeekFlags.ACCURATE,
+            0
+        );
+    }
+
     destroy() {
         if (this._bus) {
             this._bus.remove_signal_watch();

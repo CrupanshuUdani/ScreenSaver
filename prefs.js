@@ -13,7 +13,7 @@ export default class LLSPrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
 
-        window.set_default_size(500, 600);
+        window.set_default_size(500, 650);
         window.set_search_enabled(true);
 
         if (!isGtk4PaintableSinkAvailable() && !isMpvAvailable()) {
