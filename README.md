@@ -55,7 +55,7 @@ If you're looking for more advanced lock screen or desktop customization, you ma
 | | Feature | |
 |:-:|---|---|
 | 🎬 | **Video & GIF playback** | Use any video or GIF file as the lock screen background |
-| 🔁 | **Looping** | Seamless loop support |
+| 📁 | **Multiple videos** | Pick a folder instead of a single file and choose what happens when a video ends: loop, pause, play the next one, or a random one |
 | 🎨 | **Scaling modes** | Cover, fit, or stretch |
 | 🔲 | **Transparency** | Transparent video support (RGBA) |
 | ⏸️ | **Smart pause** | Automatically pauses on suspend and resumes on wake |

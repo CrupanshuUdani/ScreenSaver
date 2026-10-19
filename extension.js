@@ -10,12 +10,13 @@ import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
-import { Direction, Keys, ActionOnBlank } from './enums.js';
+import { Direction, Keys, ActionOnBlank, ActionOnEnd } from './enums.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
 import { GstPlayerProcess } from './core/gst_player_process.js';
 
 import { applyScaling } from './utils/actors.js';
 import { isOnBattery } from './utils/battery.js';
+import { resolveMediaPaths } from './utils/media_files.js';
 import { SHELL_VERSION } from './utils/shell_version.js';
 import { logInfo, logWarn, logError } from './utils/logging.js';
 import { sleep, destroySleeps } from './utils/base.js';
@@ -76,8 +77,19 @@ export default class LockscreenExtension extends Extension {
             return;
         }
 
+        // The saved path can point to a single file or to a folder of videos
+        const videoPaths = resolveMediaPaths(videoPath);
+        if (videoPaths.length === 0) {
+            sendErrorNotification(
+                `No supported videos or GIFs found at "${videoPath}". ` +
+                `Falling back to the default lock screen.`
+            );
+            logError(`Nothing to play at "${videoPath}"`);
+            return;
+        }
+
         const volume = this._settings.get_int(Keys.AUDIO_VOLUME) / 100;
-        const loop = this._settings.get_boolean(Keys.LOOPED);
+        const actionOnEnd = this._settings.get_int(Keys.ACTION_ON_END);
         const useVideorate = this._settings.get_boolean(Keys.USE_VIDEORATE);
         const framerate = this._settings.get_int(Keys.FRAMERATE);
         const colorAccurate = this._settings.get_boolean(Keys.DEBUG_USE_COLOR_ACCURATE);
@@ -107,9 +119,11 @@ export default class LockscreenExtension extends Extension {
 
         this._player = new cls({
             playerPath: this.path + '/external/run.js',
-            videoPath,
+            videoPath: videoPaths[0], // GstPlayerProcess only plays a single file
+            videoPaths,
+            actionOnEnd,
             scalingMode: this._scalingMode,
-            loop,
+            loop: actionOnEnd === ActionOnEnd.LOOP,
             volume,
             useVideorate,
             framerate,
