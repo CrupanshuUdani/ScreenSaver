@@ -42,8 +42,8 @@
 
 | | Feature | |
 |:-:|---|---|
-| 🎬 | **Video playback** | Use any video file as the lock screen background |
-| 🔁 | **Looping** | Seamless loop support |
+| 🎬 | **Video & GIF playback** | Use any video or GIF file as the lock screen background |
+| 📁 | **Multiple videos** | Pick a folder instead of a single file. A random video is chosen on every lock, and you can choose what happens when it ends: loop, pause, play the next one, or a random one |
 | 🎨 | **Scaling modes** | Cover, fit, or stretch |
 | 🔲 | **Transparency** | Transparent video support (RGBA) |
 | ⏸️ | **Smart pause** | Automatically pauses on suspend and resumes on wake |
