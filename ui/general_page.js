@@ -22,9 +22,9 @@ class LLSGeneralPage extends Adw.PreferencesPage {
 
         const group = new Adw.PreferencesGroup();
         group.add(this._buildPathRow());
+        group.add(this._buildActionOnEndRow());
         group.add(this._buildScalingRow());
         group.add(this._buildVolumeRow());
-        group.add(this._buildLoopRow());
         group.add(this._buildBatteryRow());
         group.add(this._buildActionOnBlankRow());
         group.add(this._buildInfoLabel());
@@ -89,9 +89,13 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         return row;
     }
 
-    _buildLoopRow() {
-        const row = new Adw.SwitchRow({ title: 'Loop video' });
-        this._settings.bind(Keys.LOOPED, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+    _buildActionOnEndRow() {
+        const row = new Adw.ComboRow({
+            title: 'On video end',
+            subtitle: 'What to do when the video finishes playing',
+            model: Gtk.StringList.new(['Loop', 'Pause', 'Next video', 'Random video']),
+        });
+        this._settings.bind(Keys.ACTION_ON_END, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
@@ -120,14 +124,20 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         });
         row.set_use_markup(false);
 
-        const button = new Adw.ButtonContent({
-            icon_name: 'document-open-symbolic',
-            label: 'Browse',
+        const fileButton = new Gtk.Button({
+            label: 'Choose File',
+            valign: Gtk.Align.CENTER,
         });
+        fileButton.connect('clicked', () => this._openFileDialog(row));
 
-        row.activatable_widget = button;
-        row.add_suffix(button);
-        row.connect('activated', () => this._openFileDialog(row));
+        const folderButton = new Gtk.Button({
+            label: 'Choose Folder',
+            valign: Gtk.Align.CENTER,
+        });
+        folderButton.connect('clicked', () => this._openFolderDialog(row));
+
+        row.add_suffix(fileButton);
+        row.add_suffix(folderButton);
 
         return row;
     }
@@ -144,6 +154,33 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             margin_top: 6,
             margin_start: 12,
             margin_end: 12,
+        });
+    }
+
+    _openFolderDialog(row) {
+        const dialog = new Gtk.FileDialog({ title: 'Select Folder with Videos or GIFs' });
+
+        const videoPath = this._settings.get_string(Keys.VIDEO_PATH);
+        if (videoPath) {
+            const parent = Gio.File.new_for_path(videoPath).get_parent();
+            if (parent)
+                dialog.set_initial_folder(parent);
+        }
+
+        const window = row.get_root();
+        dialog.select_folder(window, null, (d, result) => {
+            try {
+                const folder = d.select_folder_finish(result);
+                if (folder) {
+                    row.subtitle = folder.get_path();
+                    this._settings.set_string(Keys.VIDEO_PATH, folder.get_path());
+                } else {
+                    row.subtitle = 'None';
+                    this._settings.set_string(Keys.VIDEO_PATH, '');
+                }
+            } catch (e) {
+                logError(`Error selecting folder: ${e}`);
+            }
         });
     }
 

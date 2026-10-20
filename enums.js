@@ -1,12 +1,12 @@
 export const Keys = {
     DISABLE_ON_BATTERY: "general-disable-on-battery",
     ACTION_ON_BLANK: "general-action-on-blank",
+    ACTION_ON_END: "general-action-on-end",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",
     USE_VIDEORATE: "background-video-use-videorate",
     FRAMERATE: "background-video-framerate",
-    LOOPED: "background-video-looped",
     FADE_IN_DURATION: "background-fade-in-duration",
 
     BLUR_RADIUS: "background-video-blur-radius",
@@ -37,6 +37,13 @@ export const ActionOnBlank = {
     IGNORE: 0,
     PAUSE: 1,
     RESTART: 2,
+}
+
+export const ActionOnEnd = {
+    LOOP: 0,
+    PAUSE: 1,
+    NEXT: 2,
+    RANDOM: 3,
 }
 
 /**

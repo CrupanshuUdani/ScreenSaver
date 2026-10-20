@@ -3,6 +3,7 @@ import GLib from 'gi://GLib';
 
 import { logError, logWarn } from '../utils/logging.js';
 import { sleep } from '../utils/base.js';
+import { ActionOnEnd } from '../enums.js';
 
 const logErrorMpv = (msg) => logError(`MpvPlayerProcess: ${msg}`);
 const logWarnMpv = (msg) => logWarn(`MpvPlayerProcess: ${msg}`);
@@ -28,14 +29,19 @@ const FADE_DURATION_MS = 280;
 
 export class MpvPlayerProcess {
     constructor({ 
-        videoPath, scalingMode, loop, volume, 
+        videoPaths, actionOnEnd = ActionOnEnd.LOOP, scalingMode, volume, 
         useVideorate = false, framerate, 
     }) {
         this._socketPath = '/tmp/lls-mpv.sock';
 
-        this._videoPath = videoPath;
+        this._videoPaths = videoPaths;
+        this._actionOnEnd = actionOnEnd;
+        // Random mode also picks the first video at random
+        this._currentIndex = actionOnEnd === ActionOnEnd.RANDOM
+            ? this._randomIndex()
+            : 0;
+        this._shouldPlay = false;
         this._scalingMode = scalingMode;
-        this._loop = loop;
         this._volume = volume;
         this._useVideorate = useVideorate;
         this._framerate = framerate;
@@ -77,7 +83,7 @@ export class MpvPlayerProcess {
             '--pause=yes',
             '--stop-screensaver=no',
             `--input-ipc-server=${this._socketPath}`, 
-            this._videoPath,
+            this._videoPaths[this._currentIndex],
             '--no-config',
             '--keepaspect=no',
             '--hwdec=auto',
@@ -94,7 +100,7 @@ export class MpvPlayerProcess {
         if (transparencyArg)
             args.push(transparencyArg);
 
-        if (this._loop)
+        if (this._actionOnEnd === ActionOnEnd.LOOP)
             args.push('--loop');
 
         if (this._useVideorate)
@@ -174,6 +180,7 @@ export class MpvPlayerProcess {
 
             if (file.query_exists(null)) {
                 await this._connectIpc(socketPath);
+                this._observeProperties();
                 this._startReadLoop().catch(err => logErrorMpv(
                     `read loop crashed: ${err}`
                 ));
@@ -183,6 +190,13 @@ export class MpvPlayerProcess {
             await sleep(50);
         }
         throw new MpvError('timed out waiting for mpv IPC socket to appear');
+    }
+
+    _observeProperties() {
+        // Observers belong to the IPC connection, so they have to be
+        // registered again every time we reconnect
+        this._queueCommand('observe_property', 1, 'playback-time');
+        this._queueCommand('observe_property', 2, 'eof-reached');
     }
 
     _queueCommand(...args) {
@@ -281,14 +295,51 @@ export class MpvPlayerProcess {
                 this._position = data.data;
             }
 
-            // Retrieve video params on initial load
+            // Retrieve video params on every load
             if (data.event == "file-loaded") {
-                this._queueCommand('observe_property', 1, 'playback-time');
                 this._queueCommand('get_property', 'video-params');
+            }
+
+            //NOTE: 
+            // With --keep-open mpv doesn't send "end-file" when the video 
+            // finishes, it just sets eof-reached instead
+            if (data.name == 'eof-reached' && data.data === true) {
+                this._onVideoEnd();
             }
         } catch(err) {
             logWarnMpv(`failed to handle "${line}". Reason: ${err}`)
         }
+    }
+
+    _randomIndex(exclude = -1) {
+        const count = this._videoPaths.length;
+        if (count <= 1) return 0;
+
+        // Draw from the other videos only, then skip over the excluded one
+        const index = Math.floor(Math.random() * (exclude >= 0 ? count - 1 : count));
+        return exclude >= 0 && index >= exclude ? index + 1 : index;
+    }
+
+    _onVideoEnd() {
+        let nextIndex;
+
+        switch (this._actionOnEnd) {
+            case ActionOnEnd.NEXT:
+                nextIndex = (this._currentIndex + 1) % this._videoPaths.length;
+                break;
+            case ActionOnEnd.RANDOM:
+                nextIndex = this._randomIndex(this._currentIndex);
+                break;
+            default:
+                // Loop is handled by mpv itself and pause keeps the last frame
+                return;
+        }
+
+        this._currentIndex = nextIndex;
+        this._queueCommand('loadfile', this._videoPaths[nextIndex], 'replace');
+
+        if (this._shouldPlay)
+            this._queueCommand('set_property', 'pause', 'no');
     }
 
     _cleanupIpc() {
@@ -365,11 +416,13 @@ export class MpvPlayerProcess {
     }
 
     play() {
+        this._shouldPlay = true;
         this._queueCommand('set_property', 'pause', 'no');
         this._fade('in');
     }
 
     pause() {
+        this._shouldPlay = false;
         this._fade('out', () => {
             this._queueCommand('set_property', 'pause', 'yes');
         });
@@ -381,6 +434,7 @@ export class MpvPlayerProcess {
     }
 
     pauseImmediately() {
+        this._shouldPlay = false;
         this._clearTransitionTimeout();
         this._queueCommand('set_property', 'pause', 'yes');
         this._lastSettledGain = 0;

@@ -9,6 +9,11 @@
             <default>1</default>
             <summary>What do to when the screen goes blank (0 - nothing, 1 - pause, 2 - restart video)</summary>
         </key>
+        <key name="general-action-on-end" type="i">
+            <range min="0" max="3" />
+            <default>0</default>
+            <summary>What to do when the video ends (0 - loop, 1 - pause, 2 - next video, 3 - random video)</summary>
+        </key>
 
         <key name="background-video-path" type="s">
             <default>""</default>
@@ -37,10 +42,6 @@
             <range min="1" max="120" />
             <default>25</default>
             <summary>Background video framerate</summary>
-        </key>
-        <key name="background-video-looped" type="b">
-            <default>true</default>
-            <summary>Is background video looped</summary>
         </key>
         <key name="background-audio-volume" type="i">
             <range min="0" max="100" />
