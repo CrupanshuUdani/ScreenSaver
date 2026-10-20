@@ -36,10 +36,8 @@ export class MpvPlayerProcess {
 
         this._videoPaths = videoPaths;
         this._actionOnEnd = actionOnEnd;
-        // Random mode also picks the first video at random
-        this._currentIndex = actionOnEnd === ActionOnEnd.RANDOM
-            ? this._randomIndex()
-            : 0;
+        // Start from a random video so every lock shows something different
+        this._currentIndex = this._randomIndex();
         this._shouldPlay = false;
         this._scalingMode = scalingMode;
         this._volume = volume;
