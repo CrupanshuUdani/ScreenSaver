@@ -78,28 +78,25 @@ class LLSAboutPage extends Adw.PreferencesPage {
 
     _buildLinksGroup() {
         const group = new Adw.PreferencesGroup({ title: "Links" });
-
+        //NOTE: Honestly just hardcoding links is fine 
         const links = [
             {
                 title: "Source Code",
                 subtitle: "View the project on GitHub",
-                icon: "code-symbolic",
-                url: this._metadata.url ?? "https://github.com/",
+                icon: "adw-external-link-symbolic",
+                url: "https://github.com/nick-redwill/LiveLockScreen",
             },
             {
                 title: "Report a Bug",
                 subtitle: "Open an issue on the bug tracker",
-                icon: "bug-symbolic",
-                url:
-                    (this._metadata.url ?? "https://github.com/") +
-                    "/issues",
+                icon: "adw-external-link-symbolic",
+                url: "https://github.com/nick-redwill/LiveLockScreen/issues",
             },
             {
-                title: "Donate",
-                subtitle: "Support the developer",
+                title: "Support the Developer",
+                subtitle: "Become a sponsor on GitHub",
                 icon: "emblem-favorite-symbolic",
-                // hardcoded for reliability
-                url: "https://buymeacoffee.com/nick_redwill", 
+                url: "https://github.com/sponsors/nick-redwill", 
             },
         ];
 
@@ -118,7 +115,7 @@ class LLSAboutPage extends Adw.PreferencesPage {
 
         row.add_suffix(
             new Gtk.Image({
-                icon_name: "adw-external-link-symbolic",
+                icon_name: iconName,
                 css_classes: ["dim-label"],
                 valign: Gtk.Align.CENTER,
             }),
