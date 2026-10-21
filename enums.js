@@ -20,11 +20,6 @@ export const Keys = {
     PROMPT_BLUR_RADIUS: "prompt-blur-radius",
     PROMPT_BLUR_BRIGHTNESS: "prompt-blur-brightness",
     PROMPT_BLUR_ANIM_DURATION: "prompt-blur-anim-duration",
-
-    DEBUG_FORCE_GST: "debug-force-gst",
-    DEBUG_USE_COLOR_ACCURATE: "debug-use-color-accurate",
-    DEBUG_FORCE_FULLSCREEN: "debug-force-fullscreen",
-    DEBUG_FORCE_GIF_SUPPORT: "debug-force-gif-support",
 };
 
 export const ScalingMode = {

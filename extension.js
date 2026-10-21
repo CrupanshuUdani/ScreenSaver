@@ -10,9 +10,8 @@ import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
-import { Direction, Keys, ActionOnBlank, ActionOnEnd } from './enums.js';
+import { Direction, Keys, ActionOnBlank } from './enums.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
-import { GstPlayerProcess } from './core/gst_player_process.js';
 
 import { applyScaling } from './utils/actors.js';
 import { isOnBattery } from './utils/battery.js';
@@ -21,7 +20,7 @@ import { SHELL_VERSION } from './utils/shell_version.js';
 import { logInfo, logWarn, logError } from './utils/logging.js';
 import { sleep, destroySleeps } from './utils/base.js';
 import { getPowerSaveMode } from './utils/dbus.js';
-import { isGtk4PaintableSinkAvailable, isMpvAvailable } from './utils/check_dependencies.js';
+import { isMpvAvailable } from './utils/check_dependencies.js';
 import { sendErrorNotification } from './utils/notifications.js';
 
 import { ActorAnimator } from './helpers/actor_animator.js';
@@ -92,40 +91,22 @@ export default class LockscreenExtension extends Extension {
         const actionOnEnd = this._settings.get_int(Keys.ACTION_ON_END);
         const useVideorate = this._settings.get_boolean(Keys.USE_VIDEORATE);
         const framerate = this._settings.get_int(Keys.FRAMERATE);
-        const colorAccurate = this._settings.get_boolean(Keys.DEBUG_USE_COLOR_ACCURATE);
 
-        const forceGst = this._settings.get_boolean(Keys.DEBUG_FORCE_GST);
-
-        let cls = null;
-        if (!forceGst && isMpvAvailable()) {
-            logInfo('Using MPV as playback backend');
-            cls = MpvPlayerProcess;
-        }
-        else if (isGtk4PaintableSinkAvailable()) {
-            logInfo('Using GStreamer as playback backend');
-            cls = GstPlayerProcess;
-        }
-        
-        if (!cls)
-        {
+       if (!isMpvAvailable()) {
             sendErrorNotification(
-                `No suitable backends available for playback! ` +
-                `Install MPV (recommended) or GStreamer. ` +
-                `More info in README.md.`
-            )
-            logError('No suitable backends available for playback');
+                'Live Lock Screen needs MPV to play media. Install it with your package manager (see the README for details).'
+            );
+            logError('MPV not found in PATH');
             return;
         }
 
-        this._player = new cls({
-            playerPath: this.path + '/external/run.js',
+        this._player = new MpvPlayerProcess({
             videoPaths,
             actionOnEnd,
             scalingMode: this._scalingMode,
             volume,
             useVideorate,
             framerate,
-            colorAccurate: colorAccurate
         });
 
         await this._player.run();
@@ -141,7 +122,6 @@ export default class LockscreenExtension extends Extension {
         this._scalingMode = this._settings.get_int(Keys.SCALING_MODE);
         this._blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
         this._blurBrightness = this._settings.get_double(Keys.BLUR_BRIGHTNESS);
-        this._forceFullscreen = this._settings.get_boolean(Keys.DEBUG_FORCE_FULLSCREEN);
 
         this._promptSettings = {
             [Keys.PROMPT_PAUSE]:              this._settings.get_boolean(Keys.PROMPT_PAUSE),

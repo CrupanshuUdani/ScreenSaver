@@ -16,9 +16,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         });
 
         this._settings = settings;
-        this._forceGif = settings.get_boolean(Keys.DEBUG_FORCE_GIF_SUPPORT, false);
-
-        this.add(this._buildBackendNoticeGroup());
 
         const group = new Adw.PreferencesGroup();
         group.add(this._buildPathRow());
@@ -29,23 +26,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildActionOnBlankRow());
         group.add(this._buildInfoLabel());
         this.add(group);
-    }
-
-    _buildBackendNoticeGroup() {
-        const group = new Adw.PreferencesGroup();
-
-        const row = new Adw.ActionRow({
-            title: 'GStreamer playback is being retired',
-            subtitle:
-                `Install MPV for better reliability and continued support.\n\n` +
-                `If you run into issues with MPV, please report them. ` +
-                `You can force GStreamer playback in debug settings in the meantime.`,
-            icon_name: 'dialog-warning-symbolic',
-        });
-        row.add_css_class('warning');
-
-        group.add(row);
-        return group;
     }
 
     _buildScalingRow() {
