@@ -1,5 +1,6 @@
 export const Keys = {
-    DISABLE_ON_BATTERY: "general-disable-on-battery",
+    // Keeping the old "general-disable-on-battery" name for backward compatibility
+    PAUSE_ON_BATTERY: "general-disable-on-battery",
     ACTION_ON_BLANK: "general-action-on-blank",
     ACTION_ON_END: "general-action-on-end",
 

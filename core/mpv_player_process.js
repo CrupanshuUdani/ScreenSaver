@@ -29,8 +29,8 @@ const FADE_DURATION_MS = 280;
 
 export class MpvPlayerProcess {
     constructor({ 
-        videoPaths, actionOnEnd = ActionOnEnd.LOOP, scalingMode, volume, 
-        useVideorate = false, framerate, 
+        videoPaths, actionOnEnd = ActionOnEnd.LOOP, volume, 
+        useVideorate = false, framerate, onSizeChange
     }) {
         this._socketPath = '/tmp/lls-mpv.sock';
 
@@ -39,10 +39,11 @@ export class MpvPlayerProcess {
         // Start from a random video so every lock shows something different
         this._currentIndex = this._randomIndex();
         this._shouldPlay = false;
-        this._scalingMode = scalingMode;
         this._volume = volume;
         this._useVideorate = useVideorate;
         this._framerate = framerate;
+
+        this._onSizeChange = onSizeChange;
 
         this._proc = null;
         this._pid = null;
@@ -57,7 +58,6 @@ export class MpvPlayerProcess {
         this._shuttingDown = false;
         this._reconnecting = false;
         
-
         this._transitionTimeoutId = null;
         this._currentVolume = volume;
         this._position = 0;
@@ -195,6 +195,7 @@ export class MpvPlayerProcess {
         // registered again every time we reconnect
         this._queueCommand('observe_property', 1, 'playback-time');
         this._queueCommand('observe_property', 2, 'eof-reached');
+        this._queueCommand('observe_property', 3, 'video-params');
     }
 
     _queueCommand(...args) {
@@ -285,18 +286,17 @@ export class MpvPlayerProcess {
             const data = JSON.parse(line);
 
             if (data.data && data.data.w && data.data.h) {
-                this.w = data.data.w;
-                this.h = data.data.h;
+                if (this.w != data.data.w || this.h != data.data.h) {
+                    this.w = data.data.w;
+                    this.h = data.data.h;
+                    this._onSizeChange?.(this.w, this.h);
+                }
             }
 
             if (data.name == 'playback-time' && data.data) {
                 this._position = data.data;
             }
 
-            // Retrieve video params on every load
-            if (data.event == "file-loaded") {
-                this._queueCommand('get_property', 'video-params');
-            }
 
             //NOTE: 
             // With --keep-open mpv doesn't send "end-file" when the video 

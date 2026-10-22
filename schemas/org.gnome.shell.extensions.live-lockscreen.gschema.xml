@@ -2,7 +2,7 @@
     <schema id="org.gnome.shell.extensions.live-lockscreen" path="/org/gnome/shell/extensions/live-lockscreen/">
         <key name="general-disable-on-battery" type="b">
             <default>false</default>
-            <summary>Whether to disable the extension when on battery</summary>
+            <summary>Whether to pause the video when on battery</summary>
         </key>
         <key name="general-action-on-blank" type="i">
             <range min="0" max="2" />

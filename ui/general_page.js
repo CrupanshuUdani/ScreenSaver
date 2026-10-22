@@ -80,8 +80,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
     }
 
     _buildBatteryRow() {
-        const row = new Adw.SwitchRow({ title: 'Disable on battery' });
-        this._settings.bind(Keys.DISABLE_ON_BATTERY, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        const row = new Adw.SwitchRow({ title: 'Pause on battery' });
+        this._settings.bind(Keys.PAUSE_ON_BATTERY, row, 'active', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
