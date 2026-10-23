@@ -10,7 +10,9 @@ import { sendErrorNotification } from './utils/notifications.js';
 import { DialogInjector } from './core/dialog_injector.js';
 import { VideoRenderer } from './core/video_renderer.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
+import { Playlist } from './core/playlist.js';
 
+import { MprisServer } from './helpers/mpris_server.js';
 import { SleepWatcher } from './helpers/sleep_watcher.js';
 import { BatteryWatcher } from './helpers/battery_watcher.js';
 import { ScreenBlankWatcher } from './helpers/screen_blank_watcher.js';
@@ -24,6 +26,10 @@ export default class LockscreenExtension extends Extension {
         this._sleeping = false; 
         // Last applied result of _isActive(), see _updateActive()
         this._active = false;
+        // Paused through media controls, nothing else resumes playback until played again
+        this._userPaused = false;
+        // Last pause state reported by mpv
+        this._playerPaused = true;
         this._settings = this.getSettings();
 
         this._setup().catch((e) => {
@@ -32,22 +38,45 @@ export default class LockscreenExtension extends Extension {
         });
     }
 
-    //TODO: Split into smaller functions
     async _setup() {
-        if (!isMpvAvailable()) {
-            sendErrorNotification(
-                'Live Lock Screen needs MPV to play media. ' +
-                'Install it with your package manager ' +
-                '(see the README for details).'
-            );
-            logError('MPV not found in PATH');
+        if (!this._checkMpv())
             return;
-        }
 
+        const videoPaths = this._getVideoPaths();
+        if (!videoPaths)
+            return;
+
+        this._readPlaybackSettings();
+        this._setupWatchers();
+        await this._setupInjector();
+
+        this._setupPlayer(this._createPlaylist(videoPaths));
+        if (this._settings.get_boolean(Keys.MPRIS_ENABLED))
+            this._setupMpris();
+
+        await this._player.run();
+        const window = await this._player.waitForWindow(WINDOW_TIMEOUT);
+        await this._setupRenderer(window);
+    }
+
+    _checkMpv() {
+        if (isMpvAvailable())
+            return true;
+
+        sendErrorNotification(
+            'Live Lock Screen needs MPV to play media. ' +
+            'Install it with your package manager ' +
+            '(see the README for details).'
+        );
+        logError('MPV not found in PATH');
+        return false;
+    }
+
+    _getVideoPaths() {
         const videoPath = this._settings.get_string(Keys.VIDEO_PATH);
         if (!videoPath) {
             logWarn('Video not set, falling back');
-            return;
+            return null;
         }
 
         // The saved path can point to a single file or to a folder of videos
@@ -58,49 +87,54 @@ export default class LockscreenExtension extends Extension {
                 `Falling back to the default lock screen.`
             );
             logError(`Nothing to play at "${videoPath}"`);
-            return;
+            return null;
         }
 
+        return videoPaths;
+    }
+
+    /**
+     * Settings used by the watchers and callbacks during the whole lock,
+     * so they have to be read before anything else is set up
+     */
+    _readPlaybackSettings() {
         this._actionOnBlank = this._settings.get_int(Keys.ACTION_ON_BLANK);
-        this._disableOnBattery = this._settings.get_boolean(Keys.PAUSE_ON_BATTERY)
-
-        const fadeInDuration = this._settings.get_int(Keys.FADE_IN_DURATION);
-        const scalingMode = this._settings.get_int(Keys.SCALING_MODE);
-        const blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
-        const blurBrightness = this._settings.get_double(Keys.BLUR_BRIGHTNESS);
-
-        const volume = this._settings.get_int(Keys.AUDIO_VOLUME) / 100;
-        const actionOnEnd = this._settings.get_int(Keys.ACTION_ON_END);
-        const useVideorate = this._settings.get_boolean(Keys.USE_VIDEORATE);
-        const framerate = this._settings.get_int(Keys.FRAMERATE);
-        const mpvProfile = this._settings.get_int(Keys.MPV_PROFILE);
-        const mpvCustomArgs = this._settings.get_strv(Keys.MPV_CUSTOM_ARGS);
-
+        this._disableOnBattery = this._settings.get_boolean(Keys.PAUSE_ON_BATTERY);
         this._promptPause = this._settings.get_boolean(Keys.PROMPT_PAUSE);
-        const promptGrayscale = this._settings.get_boolean(Keys.PROMPT_GRAYSCALE);
-        const promptChangeBlur = this._settings.get_boolean(Keys.PROMPT_CHANGE_BLUR);
-        const promptBlurRadius = this._settings.get_int(Keys.PROMPT_BLUR_RADIUS);
-        const promptBlurBrightness = this._settings.get_double(Keys.PROMPT_BLUR_BRIGHTNESS);
-        const promptAnimDuration = this._settings.get_int(Keys.PROMPT_BLUR_ANIM_DURATION);
+    }
 
-        this._setupWatchers();
-
+    async _setupInjector() {
         this._injector = new DialogInjector({
             onCreateBackgrounds: this._onCreateBackgrounds.bind(this),
             onPromptShow: this._onPromptShown.bind(this),
             onClockShow: this._onClockShown.bind(this),
         });
         await this._injector.inject();
+    }
 
+    _createPlaylist(videoPaths) {
+        const playlist = new Playlist({
+            videos: videoPaths,
+            order: this._settings.get_int(Keys.PLAYLIST_ORDER),
+            start: this._settings.get_int(Keys.PLAYLIST_START),
+            //NOTE: Last played is the name of the file, because keeping 
+            // index is unreliable
+            lastPlayed: this._settings.get_string(Keys.PLAYLIST_LAST_PLAYED),
+        });
+        this._saveLastPlayed(playlist.current());
+        return playlist;
+    }
+
+    _setupPlayer(playlist) {
         this._player = new MpvPlayerProcess({
-            videoPaths,
-            actionOnEnd,
-            volume,
-            useVideorate,
-            framerate,
+            playlist,
+            actionOnEnd: this._settings.get_int(Keys.ACTION_ON_END),
+            volume: this._settings.get_int(Keys.AUDIO_VOLUME) / 100,
+            useVideorate: this._settings.get_boolean(Keys.USE_VIDEORATE),
+            framerate: this._settings.get_int(Keys.FRAMERATE),
             configPath: this.dir.get_child('external').get_child('mpv.conf').get_path(),
-            profile: mpvProfile,
-            customArgs: mpvCustomArgs,
+            profile: this._settings.get_int(Keys.MPV_PROFILE),
+            customArgs: this._settings.get_strv(Keys.MPV_CUSTOM_ARGS),
             onSizeChange: (w, h) => {
                 if (!this._renderer) return;
 
@@ -108,42 +142,60 @@ export default class LockscreenExtension extends Extension {
                 // If clones werent created till this point, create them now
                 if (!this._renderer.clonesCreated())
                     this._injector.recreateBackgrounds();
-            }
+            },
+            onPauseChange: (paused) => {
+                this._mpris?.setPlaying(!paused);
+            },
+            onFileChange: (path) => {
+                this._mpris?.setTrack(path);
+                this._saveLastPlayed(path);
+            },
         });
-        await this._player.run();
-        const window = await this._player.waitForWindow(WINDOW_TIMEOUT);
+    }
 
+    async _setupRenderer(window) {
         this._renderer = new VideoRenderer({
             window,
             w: this._player.w,
             h: this._player.h,
-            scalingMode,
-            fadeInDuration,
-            blurRadius,
-            blurBrightness,
-            promptGrayscale,
-            promptChangeBlur,
-            promptAnimDuration,
-            promptBlurBrightness,
-            promptBlurRadius,
-            onReady: this._onReady.bind(this) 
+            scalingMode: this._settings.get_int(Keys.SCALING_MODE),
+            fadeInDuration: this._settings.get_int(Keys.FADE_IN_DURATION),
+            blurRadius: this._settings.get_int(Keys.BLUR_RADIUS),
+            blurBrightness: this._settings.get_double(Keys.BLUR_BRIGHTNESS),
+            promptGrayscale: this._settings.get_boolean(Keys.PROMPT_GRAYSCALE),
+            promptChangeBlur: this._settings.get_boolean(Keys.PROMPT_CHANGE_BLUR),
+            promptAnimDuration: this._settings.get_int(Keys.PROMPT_BLUR_ANIM_DURATION),
+            promptBlurBrightness: this._settings.get_double(Keys.PROMPT_BLUR_BRIGHTNESS),
+            promptBlurRadius: this._settings.get_int(Keys.PROMPT_BLUR_RADIUS),
+            onReady: this._onReady.bind(this),
         });
+
+        // Without a size yet, onSizeChange creates the backgrounds later
         if (this._player.w)
             this._injector.recreateBackgrounds();
     }
 
-    playVideo() {
-        if (!this._player) return;
+    _setupMpris() {
+        const play = () => {
+            this._userPaused = false;
+            this.playVideo();
+        };
+        const pause = () => {
+            this._userPaused = true;
+            this._player?.pause();
+        };
 
-        //NOTE: Checking if something prevents playback
-        const preventPlay = (
-            (this._promptPause && this._promptShown) ||
-            (this._disableOnBattery && this._batteryWatcher?.isOnBattery()) ||
-            !this._isActive()
-        );
-
-        if (!preventPlay)
-            this._player.play();
+        this._mpris = new MprisServer({
+            canGoNext: this._player.hasMultipleVideos,
+            canGoPrevious: this._player.hasMultipleVideos,
+            onPlay: play,
+            onPause: pause,
+            onStop: () => this._player?.stopImmediately(),
+            onPlayPause: () => this._player?.isPaused() ? play() : pause(),
+            onNext: () => this._player?.next(),
+            onPrevious: () => this._player?.previous(),
+        });
+        this._mpris.setTrack(this._player.currentFile);
     }
 
     _setupWatchers() {
@@ -176,6 +228,21 @@ export default class LockscreenExtension extends Extension {
         }
     }
 
+    playVideo() {
+        if (!this._player) return;
+
+        //NOTE: Checking if something prevents playback
+        const preventPlay = (
+            this._userPaused ||
+            (this._promptPause && this._promptShown) ||
+            (this._disableOnBattery && this._batteryWatcher?.isOnBattery()) ||
+            !this._isActive()
+        );
+
+        if (!preventPlay)
+            this._player.play();
+    }
+
     /**
      * Whether the video should be visible and running as far as
      * sleep and screen state are concerned.
@@ -201,13 +268,23 @@ export default class LockscreenExtension extends Extension {
         }
 
         this._renderer?.pauseFade();
-        if (this._actionOnBlank == ActionOnBlank.RESTART)
+        if (this._actionOnBlank == ActionOnBlank.RESTART) {
             this._player?.stopImmediately();
-        else if (this._sleeping)
+        } else if (this._actionOnBlank == ActionOnBlank.NEXT) {
+            // The next video is loaded paused and starts once the screen is back
+            this._player?.pauseImmediately();
+            this._player?.next();
+        } else if (this._sleeping) {
             // No time for the audio fade before the system suspends
             this._player?.pauseImmediately();
-        else if (this._actionOnBlank == ActionOnBlank.PAUSE)
+        } else if (this._actionOnBlank == ActionOnBlank.PAUSE) {
             this._player?.pause();
+        }
+    }
+
+    _saveLastPlayed(path) {
+        if (this._settings?.get_string(Keys.PLAYLIST_LAST_PLAYED) !== path)
+            this._settings?.set_string(Keys.PLAYLIST_LAST_PLAYED, path);
     }
 
     _onCreateBackgrounds(monitorIndex, group) {
@@ -252,6 +329,7 @@ export default class LockscreenExtension extends Extension {
     disable() {
         destroySleeps();
 
+        this._mpris?.destroy();
         this._batteryWatcher?.destroy();
         this._sleepWatcher?.destroy();
         this._blankWatcher?.destroy();

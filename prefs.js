@@ -8,6 +8,7 @@ import { AboutPage } from "./ui/about_page.js";
 
 import { isMpvAvailable } from './utils/check_dependencies.js';
 
+//FIXME: Update the entire UI of preferences
 export default class LLSPrefs extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();

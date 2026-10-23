@@ -36,9 +36,12 @@ const PROFILE_NAMES = {
 
 export class MpvPlayerProcess {
     constructor({
-        videoPaths, actionOnEnd = ActionOnEnd.LOOP, volume,
-        useVideorate = false, framerate, onSizeChange,
-        configPath, profile = MpvProfile.QUALITY, customArgs = [],
+        playlist, actionOnEnd = ActionOnEnd.LOOP, 
+        volume,
+        useVideorate = false, framerate, 
+        onSizeChange, onPauseChange, onFileChange,
+        configPath, 
+        profile = MpvProfile.QUALITY, customArgs = [],
     }) {
         // Unique per player, inside the user's private runtime dir (/run/user/<uid>)
         this._socketPath = GLib.build_filenamev([
@@ -50,16 +53,17 @@ export class MpvPlayerProcess {
         this._profile = profile;
         this._customArgs = customArgs;
 
-        this._videoPaths = videoPaths;
+        this._playlist = playlist;
         this._actionOnEnd = actionOnEnd;
-        // Start from a random video so every lock shows something different
-        this._currentIndex = this._randomIndex();
         this._shouldPlay = false;
+        this._paused = true;
         this._volume = volume;
         this._useVideorate = useVideorate;
         this._framerate = framerate;
 
         this._onSizeChange = onSizeChange;
+        this._onPauseChange = onPauseChange;
+        this._onFileChange = onFileChange;
 
         this._proc = null;
         this._pid = null;
@@ -121,7 +125,7 @@ export class MpvPlayerProcess {
             args.push(`--vf=fps=${this._framerate}`);
 
         // "--" so a file name starting with "-" is not parsed as an option
-        args.push('--', this._videoPaths[this._currentIndex]);
+        args.push('--', this._playlist.current());
 
         this._proc = Gio.Subprocess.new(
             args, 
@@ -233,6 +237,11 @@ export class MpvPlayerProcess {
         this._queueCommand('observe_property', 1, 'playback-time');
         this._queueCommand('observe_property', 2, 'eof-reached');
         this._queueCommand('observe_property', 3, 'video-params');
+        this._queueCommand('observe_property', 4, 'pause');
+    }
+
+    isPaused() {
+        return this._paused;
     }
 
     _queueCommand(...args) {
@@ -334,6 +343,10 @@ export class MpvPlayerProcess {
                 this._position = data.data;
             }
 
+            if (data.name == 'pause') {
+                this._paused = data.data;
+                this._onPauseChange?.(data.data);
+            }
 
             //NOTE: 
             // With --keep-open mpv doesn't send "end-file" when the video 
@@ -346,35 +359,40 @@ export class MpvPlayerProcess {
         }
     }
 
-    _randomIndex(exclude = -1) {
-        const count = this._videoPaths.length;
-        if (count <= 1) return 0;
-
-        // Draw from the other videos only, then skip over the excluded one
-        const index = Math.floor(Math.random() * (exclude >= 0 ? count - 1 : count));
-        return exclude >= 0 && index >= exclude ? index + 1 : index;
+    _onVideoEnd() {
+        //NOTE:
+        // Loop is handled by mpv itself and pause keeps the last frame.
+        // The order of the videos is up to the playlist
+        if (this._actionOnEnd === ActionOnEnd.NEXT)
+            this.next();
     }
 
-    _onVideoEnd() {
-        let nextIndex;
+    _loadFile(path) {
+        this._queueCommand('loadfile', path, 'replace');
 
-        switch (this._actionOnEnd) {
-            case ActionOnEnd.NEXT:
-                nextIndex = (this._currentIndex + 1) % this._videoPaths.length;
-                break;
-            case ActionOnEnd.RANDOM:
-                nextIndex = this._randomIndex(this._currentIndex);
-                break;
-            default:
-                // Loop is handled by mpv itself and pause keeps the last frame
-                return;
-        }
-
-        this._currentIndex = nextIndex;
-        this._queueCommand('loadfile', this._videoPaths[nextIndex], 'replace');
-
+        // mpv keeps the pause state across files, this is just in case
         if (this._shouldPlay)
             this._queueCommand('set_property', 'pause', 'no');
+
+        this._onFileChange?.(path);
+    }
+
+    get currentFile() {
+        return this._playlist.current();
+    }
+
+    get hasMultipleVideos() {
+        return this._playlist.size > 1;
+    }
+
+    next() {
+        this._playlist.increment();
+        this._loadFile(this._playlist.current());
+    }
+
+    previous() {
+        this._playlist.decrement();
+        this._loadFile(this._playlist.current());
     }
 
     _cleanupIpc() {

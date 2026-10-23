@@ -24,15 +24,46 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildScalingRow());
         group.add(this._buildVolumeRow());
         group.add(this._buildBatteryRow());
+        group.add(this._buildMprisRow());
         group.add(this._buildActionOnBlankRow());
         group.add(this._buildInfoLabel());
         this.add(group);
+
+        const playlistGroup = new Adw.PreferencesGroup({
+            title: 'Playlist',
+            description: 'Only used when a folder is selected',
+        });
+        playlistGroup.add(this._buildPlaylistOrderRow());
+        playlistGroup.add(this._buildPlaylistStartRow());
+        this.add(playlistGroup);
 
         const mpvGroup = new Adw.PreferencesGroup({ title: 'Player' });
         mpvGroup.add(this._buildMpvProfileRow());
         mpvGroup.add(this._buildMpvCustomArgsRow());
         mpvGroup.add(this._buildMpvProfileNote());
         this.add(mpvGroup);
+    }
+
+    _buildPlaylistOrderRow() {
+        // Order matches PlaylistOrder
+        const row = new Adw.ComboRow({
+            title: 'Order',
+            subtitle: 'Shuffle plays every video once in a random order, ' +
+                      'Random picks any video next',
+            model: Gtk.StringList.new(['Sequential', 'Shuffle', 'Random']),
+        });
+        this._settings.bind(Keys.PLAYLIST_ORDER, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildPlaylistStartRow() {
+        // Order matches PlaylistStart
+        const row = new Adw.ComboRow({
+            title: 'Start with',
+            model: Gtk.StringList.new(['First', 'Random', 'Last played']),
+        });
+        this._settings.bind(Keys.PLAYLIST_START, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
     }
 
     _buildMpvProfileRow() {
@@ -132,7 +163,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         const row = new Adw.ComboRow({
             title: 'On video end',
             subtitle: 'What to do when the video finishes playing',
-            model: Gtk.StringList.new(['Loop', 'Pause', 'Next video', 'Random video']),
+            model: Gtk.StringList.new(['Loop', 'Pause', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_END, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
@@ -144,11 +175,20 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         return row;
     }
 
+    _buildMprisRow() {
+        const row = new Adw.SwitchRow({
+            title: 'Media controls',
+            subtitle: 'Control the video with media keys and other MPRIS clients',
+        });
+        this._settings.bind(Keys.MPRIS_ENABLED, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
     _buildActionOnBlankRow() {
         const row = new Adw.ComboRow({
             title: 'Action on blank',
             subtitle: 'What to do with the video when the screen goes black',
-            model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video']),
+            model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_BLANK, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;

@@ -3,6 +3,11 @@ export const Keys = {
     PAUSE_ON_BATTERY: "general-disable-on-battery",
     ACTION_ON_BLANK: "general-action-on-blank",
     ACTION_ON_END: "general-action-on-end",
+    MPRIS_ENABLED: "general-mpris-enabled",
+
+    PLAYLIST_ORDER: "playlist-order",
+    PLAYLIST_START: "playlist-start",
+    PLAYLIST_LAST_PLAYED: "playlist-last-played",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",
@@ -36,13 +41,25 @@ export const ActionOnBlank = {
     IGNORE: 0,
     PAUSE: 1,
     RESTART: 2,
+    NEXT: 3,
 }
 
 export const ActionOnEnd = {
     LOOP: 0,
     PAUSE: 1,
-    NEXT: 2,
-    RANDOM: 3,
+    NEXT: 2
+}
+
+export const PlaylistOrder = {
+    SEQUENTIAL: 0,
+    SHUFFLE: 1,
+    RANDOM: 2,
+}
+
+export const PlaylistStart = {
+    FIRST: 0,
+    RANDOM: 1,
+    LAST_PLAYED: 2,
 }
 
 /**
