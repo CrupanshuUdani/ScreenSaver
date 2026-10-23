@@ -1,5 +1,6 @@
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import GObject from 'gi://GObject';
 
@@ -26,6 +27,64 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildActionOnBlankRow());
         group.add(this._buildInfoLabel());
         this.add(group);
+
+        const mpvGroup = new Adw.PreferencesGroup({ title: 'Player' });
+        mpvGroup.add(this._buildMpvProfileRow());
+        mpvGroup.add(this._buildMpvCustomArgsRow());
+        mpvGroup.add(this._buildMpvProfileNote());
+        this.add(mpvGroup);
+    }
+
+    _buildMpvProfileRow() {
+        // Order matches MpvProfile
+        const row = new Adw.ComboRow({
+            title: 'Playback profile',
+            subtitle: 'Balanced and Efficient use less GPU at the cost of image quality',
+            model: Gtk.StringList.new(['Quality', 'Balanced', 'Efficient']),
+        });
+        this._settings.bind(Keys.MPV_PROFILE, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildMpvProfileNote() {
+        return new Gtk.Label({
+            label: 'Colors may look slightly different between profiles. ' +
+                   'Efficient does not support transparency, ' +
+                   'transparent GIFs will get a black background.',
+            css_classes: ['dim-label', 'caption'],
+            wrap: true,
+            xalign: 0,
+            margin_top: 6,
+            margin_start: 12,
+            margin_end: 12,
+        });
+    }
+
+    _buildMpvCustomArgsRow() {
+        const toText = () => this._settings.get_strv(Keys.MPV_CUSTOM_ARGS)
+            .map(arg => GLib.shell_quote(arg))
+            .join(' ');
+
+        const row = new Adw.EntryRow({
+            title: 'Custom MPV arguments (e.g. --deband=yes)',
+            text: toText(),
+            show_apply_button: true,
+        });
+
+        // Split like a shell would, so quoted values with spaces stay one argument
+        row.connect('apply', r => {
+            const text = r.get_text().trim();
+            try {
+                const args = text ? GLib.shell_parse_argv(text)[1] : [];
+                this._settings.set_strv(Keys.MPV_CUSTOM_ARGS, args);
+                r.remove_css_class('error');
+            } catch (e) {
+                r.add_css_class('error');
+                logError(`Invalid custom MPV arguments: ${e.message}`);
+            }
+        });
+
+        return row;
     }
 
     _buildScalingRow() {

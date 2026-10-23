@@ -82,5 +82,15 @@
             <default>300</default>
             <summary>Background video blur change animation duration</summary>
         </key>
+
+        <key name="mpv-profile" type="i">
+            <range min="0" max="2" />
+            <default>0</default>
+            <summary>MPV profile from external/mpv.conf (0 - quality, 1 - balanced, 2 - efficient)</summary>
+        </key>
+        <key name="mpv-custom-args" type="as">
+            <default>[]</default>
+            <summary>Custom MPV arguments applied on top of the profile</summary>
+        </key>
     </schema>
 </schemalist>

@@ -28,6 +28,7 @@ export default class LockscreenExtension extends Extension {
         });
     }
 
+    //TODO: Split into smaller functions
     async _setup() {
         if (!isMpvAvailable()) {
             sendErrorNotification(
@@ -68,6 +69,8 @@ export default class LockscreenExtension extends Extension {
         const actionOnEnd = this._settings.get_int(Keys.ACTION_ON_END);
         const useVideorate = this._settings.get_boolean(Keys.USE_VIDEORATE);
         const framerate = this._settings.get_int(Keys.FRAMERATE);
+        const mpvProfile = this._settings.get_int(Keys.MPV_PROFILE);
+        const mpvCustomArgs = this._settings.get_strv(Keys.MPV_CUSTOM_ARGS);
 
         this._promptPause = this._settings.get_boolean(Keys.PROMPT_PAUSE);
         const promptGrayscale = this._settings.get_boolean(Keys.PROMPT_GRAYSCALE);
@@ -91,11 +94,11 @@ export default class LockscreenExtension extends Extension {
             volume,
             useVideorate,
             framerate,
+            configPath: this.dir.get_child('external').get_child('mpv.conf').get_path(),
+            profile: mpvProfile,
+            customArgs: mpvCustomArgs,
             onSizeChange: (w, h) => {
-                if (!this._renderer) return;
-
-                this._renderer.setSize(w, h);
-                this._injector.recreateBackgrounds();
+                this._renderer?.setSize(w, h);
             }
         });
         await this._player.run();
@@ -116,8 +119,8 @@ export default class LockscreenExtension extends Extension {
             promptBlurRadius,
             onReady: this._onReady.bind(this) 
         });
-        if (this._player.w)
-            this._injector.recreateBackgrounds();
+
+        this._injector.recreateBackgrounds();
     }
 
     playVideo() {

@@ -61,6 +61,7 @@ export class VideoRenderer {
         this._onReady = onReady;
 
         this._wrapperActors = [];
+        this._clones = [];
         this._backgroundCreated = false;
         this._promptShown = false;
 
@@ -194,6 +195,15 @@ export class VideoRenderer {
         this._w = w;
         this._h = h;
         this._resizeWindow();
+        // Resizing existing clones
+        this._clones.forEach((data) => {
+            applyScaling(
+                data.actor,
+                this._scalingMode,
+                this._w, this._h,
+                data.monitorW, data.monitorH
+            );
+        });
     }
 
     /**
@@ -219,8 +229,10 @@ export class VideoRenderer {
 
         // The dialog destroys all children of the background group before
         // recreating them, so our old wrappers are already gone at this point
-        if (monitorIndex === 0)
+        if (monitorIndex === 0) {
             this._wrapperActors = [];
+            this._clones = [];
+        }
 
         const wrapper = new Clutter.Actor();
         wrapper.connectObject('destroy', () => {
@@ -232,6 +244,11 @@ export class VideoRenderer {
 
         const cloneActor = new Clutter.Clone({
             source: this._windowActor
+        });
+        this._clones.push({
+            actor: cloneActor,
+            monitorW: monitor.width,
+            monitorH: monitor.height,
         });
 
         //NOTE: Only applying this effect when its needed
@@ -331,6 +348,7 @@ export class VideoRenderer {
             actor.destroy();
         });
         this._wrapperActors = [];
+        this._clones = [];
         this._resetWindowActor();
 
         if (this._window) {

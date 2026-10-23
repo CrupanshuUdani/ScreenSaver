@@ -21,6 +21,9 @@ export const Keys = {
     PROMPT_BLUR_RADIUS: "prompt-blur-radius",
     PROMPT_BLUR_BRIGHTNESS: "prompt-blur-brightness",
     PROMPT_BLUR_ANIM_DURATION: "prompt-blur-anim-duration",
+
+    MPV_PROFILE: "mpv-profile",
+    MPV_CUSTOM_ARGS: "mpv-custom-args",
 };
 
 export const ScalingMode = {
@@ -40,6 +43,15 @@ export const ActionOnEnd = {
     PAUSE: 1,
     NEXT: 2,
     RANDOM: 3,
+}
+
+/**
+ * Profiles defined in external/mpv.conf
+ */
+export const MpvProfile = {
+    QUALITY: 0,
+    BALANCED: 1,
+    EFFICIENT: 2,
 }
 
 /**

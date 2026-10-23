@@ -3,7 +3,7 @@ import GLib from 'gi://GLib';
 
 import { logError, logWarn } from '../utils/logging.js';
 import { sleep } from '../utils/base.js';
-import { ActionOnEnd } from '../enums.js';
+import { ActionOnEnd, MpvProfile } from '../enums.js';
 
 const logErrorMpv = (msg) => logError(`MpvPlayerProcess: ${msg}`);
 const logWarnMpv = (msg) => logWarn(`MpvPlayerProcess: ${msg}`);
@@ -23,16 +23,32 @@ Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async', 'communicate_
 Gio._promisify(Gio.DataInputStream.prototype, 'read_line_async', 'read_line_finish');
 Gio._promisify(Gio.OutputStream.prototype, 'write_bytes_async', 'write_bytes_finish');
 
-// This number is meant to match the animation 
-// duration of lockscreen widgets + some ipc overhead 
-const FADE_DURATION_MS = 280; 
+// This number is meant to match the animation
+// duration of lockscreen widgets + some ipc overhead
+const FADE_DURATION_MS = 280;
+
+// Profile names as defined in external/mpv.conf
+const PROFILE_NAMES = {
+    [MpvProfile.QUALITY]: 'quality',
+    [MpvProfile.BALANCED]: 'balanced',
+    [MpvProfile.EFFICIENT]: 'efficient',
+};
 
 export class MpvPlayerProcess {
-    constructor({ 
-        videoPaths, actionOnEnd = ActionOnEnd.LOOP, volume, 
-        useVideorate = false, framerate, onSizeChange
+    constructor({
+        videoPaths, actionOnEnd = ActionOnEnd.LOOP, volume,
+        useVideorate = false, framerate, onSizeChange,
+        configPath, profile = MpvProfile.QUALITY, customArgs = [],
     }) {
-        this._socketPath = '/tmp/lls-mpv.sock';
+        // Unique per player, inside the user's private runtime dir (/run/user/<uid>)
+        this._socketPath = GLib.build_filenamev([
+            GLib.get_user_runtime_dir(),
+            `live-lockscreen-mpv-${GLib.uuid_string_random()}.sock`,
+        ]);
+
+        this._configPath = configPath;
+        this._profile = profile;
+        this._customArgs = customArgs;
 
         this._videoPaths = videoPaths;
         this._actionOnEnd = actionOnEnd;
@@ -71,29 +87,29 @@ export class MpvPlayerProcess {
     }
 
     async run() {
-        this._removeSocketFile();
+        if (!this._configPath || !GLib.file_test(this._configPath, GLib.FileTest.IS_REGULAR))
+            throw new MpvError(`mpv config not found at "${this._configPath}"`);
 
         const transparencyArg = await this._getTransparencyArg();
 
+        // User configs are skipped, everything comes from our own config file
         const args = [
-            'mpv', 
-            '--title=LiveLockScreen',
-            '--pause=yes',
-            '--stop-screensaver=no',
-            `--input-ipc-server=${this._socketPath}`, 
-            this._videoPaths[this._currentIndex],
+            'mpv',
             '--no-config',
-            '--keepaspect=no',
-            '--hwdec=auto',
-            '--vo=gpu-next',
-            '--no-border',
-            '--keep-open=yes',
-            '--osd-level=0',
-            '--msg-level=all=no',
-            '--audio-buffer=0.1', //NOTE: prevents audio artifacts on fade
-            '--no-terminal',
-            `--volume=${Math.round(this._volume * 100)}`
+            `--include=${this._configPath}`,
+            `--profile=${this._resolveProfileName()}`,
+            ...this._filterCustomArgs(this._customArgs),
         ];
+
+        //NOTE:
+        // Options below come after the custom args on purpose (last one wins in mpv),
+        // the player logic depends on them
+        args.push(
+            '--pause=yes',
+            '--keep-open=yes',
+            `--input-ipc-server=${this._socketPath}`,
+            `--volume=${Math.round(this._volume * 100)}`
+        );
 
         if (transparencyArg)
             args.push(transparencyArg);
@@ -104,6 +120,9 @@ export class MpvPlayerProcess {
         if (this._useVideorate)
             args.push(`--vf=fps=${this._framerate}`);
 
+        // "--" so a file name starting with "-" is not parsed as an option
+        args.push('--', this._videoPaths[this._currentIndex]);
+
         this._proc = Gio.Subprocess.new(
             args, 
             Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE
@@ -111,6 +130,24 @@ export class MpvPlayerProcess {
         this._pid = parseInt(this._proc.get_identifier());
 
         await this._waitForSocketAndConnect(this._socketPath);
+    }
+
+    _resolveProfileName() {
+        return PROFILE_NAMES[this._profile] ?? PROFILE_NAMES[MpvProfile.QUALITY];
+    }
+
+    /**
+     * Only options are allowed, anything else would be added
+     * to the playlist by mpv as a file to play
+     */
+    _filterCustomArgs(customArgs) {
+        return customArgs.filter(arg => {
+            if (arg.startsWith('--') && arg.length > 2)
+                return true;
+
+            logWarnMpv(`ignoring custom argument "${arg}", only --options are allowed`);
+            return false;
+        });
     }
 
     async _getTransparencyArg() {
