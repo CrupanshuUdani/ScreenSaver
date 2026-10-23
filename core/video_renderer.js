@@ -180,6 +180,10 @@ export class VideoRenderer {
         return this._w > 0 && this._h > 0;
     }
 
+    clonesCreated() {
+        return this._clones.length > 0;
+    }
+
     _resizeWindow() {
         if (!this._window || this._window.unmanaging || !this._hasSize())
             return;

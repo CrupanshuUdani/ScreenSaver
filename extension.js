@@ -98,7 +98,12 @@ export default class LockscreenExtension extends Extension {
             profile: mpvProfile,
             customArgs: mpvCustomArgs,
             onSizeChange: (w, h) => {
-                this._renderer?.setSize(w, h);
+                if (!this._renderer) return;
+
+                this._renderer.setSize(w, h);
+                // If clones werent created till this point, create them now
+                if (!this._renderer.clonesCreated())
+                    this._injector.recreateBackgrounds();
             }
         });
         await this._player.run();
@@ -119,8 +124,8 @@ export default class LockscreenExtension extends Extension {
             promptBlurRadius,
             onReady: this._onReady.bind(this) 
         });
-
-        this._injector.recreateBackgrounds();
+        if (this._player.w)
+            this._injector.recreateBackgrounds();
     }
 
     playVideo() {
