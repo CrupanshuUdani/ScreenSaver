@@ -193,7 +193,7 @@ export class VideoRenderer {
 
     /**
      * Updates the video size and resizes the window.
-     * NOTE: Existing clones are not rescaled, recreate the backgrounds for that
+     * NOTE: Existing clones are rescaled
      */
     setSize(w, h) {
         this._w = w;
@@ -239,16 +239,19 @@ export class VideoRenderer {
         }
 
         const wrapper = new Clutter.Actor();
+        const cloneActor = new Clutter.Clone({
+            source: this._windowActor
+        });
+
+        // Destroying the wrapper destroys its clone as well, forget both
         wrapper.connectObject('destroy', () => {
             this._wrapperActors = this._wrapperActors.filter(a => a !== wrapper);
+            this._clones = this._clones.filter(c => c.actor !== cloneActor);
         }, this);
 
         backgroundGroup.add_child(wrapper);
         backgroundGroup.set_child_above_sibling(wrapper, null);
 
-        const cloneActor = new Clutter.Clone({
-            source: this._windowActor
-        });
         this._clones.push({
             actor: cloneActor,
             monitorW: monitor.width,
@@ -326,8 +329,8 @@ export class VideoRenderer {
     /**
      * Starts (or continues) the fade in. Call when the screen turns on
      */
-    fadeIn() {
-        this._fadeAnim?.play();
+    fadeIn(delay = 0) {
+        this._fadeAnim?.play(Direction.FORWARD, delay);
     }
 
     /**

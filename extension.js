@@ -20,6 +20,10 @@ const WINDOW_TIMEOUT = 10000;
 export default class LockscreenExtension extends Extension {
     enable() {
         this._promptShown = false;
+        this._ready = false; // Whether the actors are setup and ready
+        this._sleeping = false; 
+        // Last applied result of _isActive(), see _updateActive()
+        this._active = false;
         this._settings = this.getSettings();
 
         this._setup().catch((e) => {
@@ -132,11 +136,10 @@ export default class LockscreenExtension extends Extension {
         if (!this._player) return;
 
         //NOTE: Checking if something prevents playback
-        // No blank watcher (ActionOnBlank.IGNORE) means the screen state is ignored
         const preventPlay = (
             (this._promptPause && this._promptShown) ||
             (this._disableOnBattery && this._batteryWatcher?.isOnBattery()) ||
-            (this._blankWatcher && !this._blankWatcher.isOn)
+            !this._isActive()
         );
 
         if (!preventPlay)
@@ -151,35 +154,60 @@ export default class LockscreenExtension extends Extension {
             });
         }
 
+        //NOTE:
+        // Suspending also turns the screen off, so both watchers report the same
+        // transition. To avoid duplicate calls using same _updateActive function
         this._sleepWatcher = new SleepWatcher({
             onSleep: () => {
-                this._renderer?.pauseFade();
-                if (this._actionOnBlank == ActionOnBlank.RESTART)
-                    this._player?.stopImmediately();
-                else
-                    this._player?.pauseImmediately();
+                this._sleeping = true;
+                this._updateActive();
             },
             onResume: () => {
-                this._renderer?.fadeIn();
-                this.playVideo();
+                this._sleeping = false;
+                this._updateActive();
             }
         });
 
         if (this._actionOnBlank != ActionOnBlank.IGNORE) {
             this._blankWatcher = new ScreenBlankWatcher({
-                onScreenOn: () => {
-                    this._renderer?.fadeIn();
-                    this.playVideo();
-                },
-                onScreenOff: () => {
-                    this._renderer?.pauseFade();
-                    if (this._actionOnBlank == ActionOnBlank.RESTART)
-                        this._player?.stopImmediately();
-                    if (this._actionOnBlank == ActionOnBlank.PAUSE)
-                        this._player?.pause();
-                }
-            })
+                onScreenOn: () => this._updateActive(),
+                onScreenOff: () => this._updateActive(),
+            });
         }
+    }
+
+    /**
+     * Whether the video should be visible and running as far as
+     * sleep and screen state are concerned.
+     * No blank watcher (ActionOnBlank.IGNORE) means the screen state is ignored
+     */
+    _isActive() {
+        return !this._sleeping && (this._blankWatcher?.isOn ?? true);
+    }
+
+    _updateActive() {
+        if (!this._ready) return;
+
+        const active = this._isActive();
+        // If the state hasnt changed, skip (avoiding duplicate calls)
+        if (active === this._active) return;
+        this._active = active;
+
+        if (active) {
+            //NOTE: Slight delay before running the animation so the screen is visible (ideally)
+            this._renderer?.fadeIn(50);
+            this.playVideo();
+            return;
+        }
+
+        this._renderer?.pauseFade();
+        if (this._actionOnBlank == ActionOnBlank.RESTART)
+            this._player?.stopImmediately();
+        else if (this._sleeping)
+            // No time for the audio fade before the system suspends
+            this._player?.pauseImmediately();
+        else if (this._actionOnBlank == ActionOnBlank.PAUSE)
+            this._player?.pause();
     }
 
     _onCreateBackgrounds(monitorIndex, group) {
@@ -187,9 +215,12 @@ export default class LockscreenExtension extends Extension {
     }
 
     _onReady() {
+        this._ready = true;
+        this._active = this._isActive();
+
         // If the screen is blank dont start the playback and animation,
-        // the blank watcher starts them once the screen turns on
-        if (this._blankWatcher && !this._blankWatcher.isOn)
+        // _updateActive() starts them once the screen turns on
+        if (!this._active)
             return;
 
         this._renderer?.fadeIn();

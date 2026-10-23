@@ -476,18 +476,29 @@ export class MpvPlayerProcess {
         this._fadeStartedAtMs = null;
     }
 
+    _isOwnWindow(windowActor) {
+        return windowActor.get_meta_window()?.get_pid() === this._pid;
+    }
+
     async waitForWindow(timeoutMs) {
+        //NOTE:
+        // Sometimes (e.g. when using dmabuf-wayland) window can be mapped before
+        // this is called, and 'map' is not emitted again. Check existing windows first
+        const existing = global.get_window_actors().find(a => this._isOwnWindow(a));
+        if (existing) {
+            this._window = existing.get_meta_window();
+            return this._window;
+        }
+
         return new Promise((resolve, reject) => {
             this._mapId = global.window_manager.connectObject(
                 'map',
                 (_wm, windowActor) => {
-                    const win = windowActor.get_meta_window();
-
-                    if (win.get_pid() !== this._pid)
+                    if (!this._isOwnWindow(windowActor))
                         return;
 
-                    this._window = win;
-                    resolve(win);
+                    this._window = windowActor.get_meta_window();
+                    resolve(this._window);
 
                     global.window_manager.disconnectObject(this);
 
