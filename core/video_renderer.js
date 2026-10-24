@@ -430,6 +430,7 @@ export class VideoRenderer {
     }
 
     blackin() {
+        if (this._pendingOnBlack) return;
         this._blackoutAnim?.play(Direction.BACKWARD, BLACKIN_DELAY);
     }
 
