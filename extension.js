@@ -345,7 +345,7 @@ export default class LockscreenExtension extends Extension {
     */
     disable() {
         destroySleeps();
-
+        
         this._mpris?.destroy();
         this._batteryWatcher?.destroy();
         this._sleepWatcher?.destroy();
@@ -354,5 +354,6 @@ export default class LockscreenExtension extends Extension {
         this._renderer?.destroy();
         this._player?.destroy();
         this._injector?.destroy();
+        this._settings = null;
     }
 }
