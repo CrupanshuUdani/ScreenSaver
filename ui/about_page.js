@@ -3,6 +3,7 @@ import Gtk from "gi://Gtk";
 import Gio from "gi://Gio";
 import GLib from "gi://GLib";
 import GObject from "gi://GObject";
+import Pango from "gi://Pango";
 
 export var AboutPage = GObject.registerClass(
 class LLSAboutPage extends Adw.PreferencesPage {
@@ -33,43 +34,48 @@ class LLSAboutPage extends Adw.PreferencesPage {
         const box = new Gtk.Box({
             orientation: Gtk.Orientation.VERTICAL,
             spacing: 8,
-            margin_top: 32,
-            margin_bottom: 24,
+            margin_top: 30,
+            margin_bottom: 30,
             halign: Gtk.Align.CENTER,
         });
 
-        const logo = Gtk.Picture.new_for_filename(
+        const logo = Gtk.Image.new_from_file(
             GLib.build_filenamev([this._path, "icon.png"]),
         );
-        logo.set_size_request(96, 96);
+        logo.set_pixel_size(128);
         logo.add_css_class("icon-dropshadow");
         box.append(logo);
 
         const name = new Gtk.Label({
             label: this._metadata.name ?? "Live Lockscreen",
-            css_classes: ["title-2"],
+            css_classes: ["title-1"],
             margin_top: 8,
         });
         box.append(name);
 
-        const version = new Gtk.Label({
-            label: `Version ${this._metadata["version-name"] ?? "—"}`,
-            css_classes: ["dim-label"],
-        });
-        box.append(version);
+        //NOTE:
+        // libadwaita has no style class between body text and title-4,
+        // so the tagline is scaled up slightly instead
+        const taglineAttrs = new Pango.AttrList();
+        taglineAttrs.insert(Pango.attr_scale_new(1.15));
 
-        const description = new Gtk.Label({
-            label:
-                this._metadata.description ??
-                "Play a video or GIF as your GNOME lock screen background.",
+        const tagline = new Gtk.Label({
+            label: "Bring your lock screen to life",
+            attributes: taglineAttrs,
+            css_classes: ["dim-label"],
             wrap: true,
             justify: Gtk.Justification.CENTER,
-            margin_top: 8,
-            margin_start: 10,
-            margin_end: 10,
             max_width_chars: 50,
+            margin_top: 8,
         });
-        box.append(description);
+        box.append(tagline);
+
+        const version = new Gtk.Label({
+            label: `Version ${this._metadata["version-name"] ?? "—"}`,
+            css_classes: ["caption", "dim-label"],
+            margin_top: 8,
+        });
+        box.append(version);
 
         row.set_child(box);
         group.add(row);

@@ -6,6 +6,7 @@ import GObject from 'gi://GObject';
 
 import { Keys } from '../enums.js';
 import { logError } from '../utils/logging.js';
+import { listMediaFiles } from '../utils/media_files.js';
 
 export var GeneralPage = GObject.registerClass(
 class LLSGeneralPage extends Adw.PreferencesPage {
@@ -18,39 +19,117 @@ class LLSGeneralPage extends Adw.PreferencesPage {
 
         this._settings = settings;
 
+        this.add(this._buildVideoGroup());
+        this.add(this._buildPlaylistGroup());
+        this.add(this._buildEventsGroup());
+        this.add(this._buildPerformanceGroup());
+        this.add(this._buildAdvancedGroup());
+    }
+
+    _buildVideoGroup() {
         const group = new Adw.PreferencesGroup();
-        group.add(this._buildPathRow());
-        group.add(this._buildActionOnEndRow());
+        group.add(this._buildSourceRow());
         group.add(this._buildScalingRow());
         group.add(this._buildVolumeRow());
-        group.add(this._buildBatteryRow());
         group.add(this._buildMprisRow());
-        group.add(this._buildActionOnBlankRow());
-        group.add(this._buildInfoLabel());
-        this.add(group);
+        return group;
+    }
 
-        const playlistGroup = new Adw.PreferencesGroup({
+    _buildPlaylistGroup() {
+        const group = new Adw.PreferencesGroup({
             title: 'Playlist',
             description: 'Only used when a folder is selected',
         });
-        playlistGroup.add(this._buildPlaylistOrderRow());
-        playlistGroup.add(this._buildPlaylistStartRow());
-        playlistGroup.add(this._buildPlaylistFadeRow());
-        this.add(playlistGroup);
+        group.add(this._buildPlaylistOrderRow());
+        group.add(this._buildPlaylistStartRow());
+        return group;
+    }
 
-        const mpvGroup = new Adw.PreferencesGroup({ title: 'Player' });
-        mpvGroup.add(this._buildMpvProfileRow());
-        mpvGroup.add(this._buildMpvCustomArgsRow());
-        mpvGroup.add(this._buildMpvProfileNote());
-        this.add(mpvGroup);
+    _buildEventsGroup() {
+        const group = new Adw.PreferencesGroup({
+            title: 'Events',
+            description: 'How the video reacts to what happens while the screen is locked',
+        });
+        group.add(this._buildActionOnEndRow());
+        group.add(this._buildActionOnBlankRow());
+        group.add(this._buildBatteryRow());
+        group.add(this._buildInfoLabel());
+        return group;
+    }
+
+    _buildPerformanceGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Performance' });
+        group.add(this._buildMpvProfileRow());
+
+        const changeFramerateRow = this._buildChangeFramerateRow();
+        const fpsRow = this._buildFpsRow();
+        group.add(changeFramerateRow);
+        group.add(fpsRow);
+
+        const toggleFpsRow = () => fpsRow.set_visible(changeFramerateRow.active);
+        toggleFpsRow();
+        changeFramerateRow.connect('notify::active', toggleFpsRow);
+
+        group.add(this._buildMpvProfileNote());
+        return group;
+    }
+
+    _buildAdvancedGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Advanced' });
+        group.add(this._buildMpvCustomArgsRow());
+        group.add(this._buildMpvCustomArgsNote());
+        return group;
+    }
+
+    _buildMpvCustomArgsNote() {
+        return new Gtk.Label({
+            label: 'Incorrect parameters can break the extension. ' +
+                   'If the video stops showing up, clear this field.',
+            css_classes: ['dim-label', 'caption'],
+            wrap: true,
+            xalign: 0,
+            margin_top: 6,
+            margin_start: 12,
+            margin_end: 12,
+        });
+    }
+
+    _buildChangeFramerateRow() {
+        const row = new Adw.SwitchRow({
+            title: 'Change framerate',
+        });
+        this._settings.bind(Keys.USE_VIDEORATE, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildFpsRow() {
+        const row = new Adw.SpinRow({
+            title: 'Framerate',
+            adjustment: new Gtk.Adjustment({
+                lower: 1,
+                upper: 120,
+                step_increment: 1,
+                value: this._settings.get_int(Keys.FRAMERATE),
+            }),
+        });
+
+        row.add_suffix(new Gtk.Label({
+            label: 'fps',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+
+        row.connect('notify::value', r => {
+            this._settings.set_int(Keys.FRAMERATE, r.get_value());
+        });
+
+        return row;
     }
 
     _buildPlaylistOrderRow() {
         // Order matches PlaylistOrder
         const row = new Adw.ComboRow({
             title: 'Order',
-            subtitle: 'Shuffle plays every video once in a random order, ' +
-                      'Random picks any video next',
             model: Gtk.StringList.new(['Sequential', 'Shuffle', 'Random']),
         });
         this._settings.bind(Keys.PLAYLIST_ORDER, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
@@ -64,36 +143,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             model: Gtk.StringList.new(['First', 'Random', 'Last played']),
         });
         this._settings.bind(Keys.PLAYLIST_START, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
-        return row;
-    }
-
-    _buildPlaylistFadeRow() {
-        const row = new Adw.ExpanderRow({
-            title: 'Fade between videos',
-            subtitle: 'Fades through black, hides the moment the next video loads',
-            show_enable_switch: true,
-        });
-        this._settings.bind(Keys.PLAYLIST_FADE_ENABLED, row, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
-
-        const durationRow = new Adw.SpinRow({
-            title: 'Fade duration',
-            adjustment: new Gtk.Adjustment({
-                lower: 0,
-                upper: 10000,
-                step_increment: 50,
-                value: this._settings.get_int(Keys.PLAYLIST_FADE_DURATION),
-            }),
-        });
-        durationRow.add_suffix(new Gtk.Label({
-            label: 'ms',
-            valign: Gtk.Align.CENTER,
-            css_classes: ['dim-label'],
-        }));
-        durationRow.connect('notify::value', r => {
-            this._settings.set_int(Keys.PLAYLIST_FADE_DURATION, r.get_value());
-        });
-
-        row.add_row(durationRow);
         return row;
     }
 
@@ -218,21 +267,23 @@ class LLSGeneralPage extends Adw.PreferencesPage {
     _buildActionOnBlankRow() {
         const row = new Adw.ComboRow({
             title: 'Action on blank',
-            subtitle: 'What to do with the video when the screen goes black',
+            subtitle: 'What to do when the screen goes black',
             model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_BLANK, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
-    _buildPathRow() {
-        const path = this._settings.get_string(Keys.VIDEO_PATH);
-
-        const row = new Adw.ActionRow({
-            title: 'File',
-            subtitle: path !== '' ? path : 'None',
-        });
+    _buildSourceRow() {
+        const row = new Adw.ActionRow({ title: 'Source' });
         row.set_use_markup(false);
+
+        // Number of playable files, only shown for folders
+        this._sourceCountLabel = new Gtk.Label({
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        });
+        row.add_suffix(this._sourceCountLabel);
 
         const fileButton = new Gtk.Button({
             label: 'Choose File',
@@ -249,7 +300,29 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         row.add_suffix(fileButton);
         row.add_suffix(folderButton);
 
+        this._updateSourceRow(row);
         return row;
+    }
+
+    /**
+     * Shows the saved path, and for folders the number of playable files.
+     * A folder without any is marked as an error
+     */
+    _updateSourceRow(row) {
+        const path = this._settings.get_string(Keys.VIDEO_PATH);
+        row.subtitle = path !== '' ? path : 'None';
+
+        const isFolder = path !== '' && Gio.File.new_for_path(path)
+            .query_file_type(Gio.FileQueryInfoFlags.NONE, null) === Gio.FileType.DIRECTORY;
+
+        const count = isFolder ? listMediaFiles(path).length : 0;
+        this._sourceCountLabel.visible = isFolder;
+        this._sourceCountLabel.label = count === 1 ? '1 file' : `${count} files`;
+
+        if (isFolder && count === 0)
+            row.add_css_class('error');
+        else
+            row.remove_css_class('error');
     }
 
     _buildInfoLabel() {
@@ -281,13 +354,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         dialog.select_folder(window, null, (d, result) => {
             try {
                 const folder = d.select_folder_finish(result);
-                if (folder) {
-                    row.subtitle = folder.get_path();
-                    this._settings.set_string(Keys.VIDEO_PATH, folder.get_path());
-                } else {
-                    row.subtitle = 'None';
-                    this._settings.set_string(Keys.VIDEO_PATH, '');
-                }
+                this._settings.set_string(Keys.VIDEO_PATH, folder?.get_path() ?? '');
+                this._updateSourceRow(row);
             } catch (e) {
                 logError(`Error selecting folder: ${e}`);
             }
@@ -330,13 +398,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         dialog.open(window, null, (d, result) => {
             try {
                 const file = d.open_finish(result);
-                if (file) {
-                    row.subtitle = file.get_path();
-                    this._settings.set_string(Keys.VIDEO_PATH, file.get_path());
-                } else {
-                    row.subtitle = 'None';
-                    this._settings.set_string(Keys.VIDEO_PATH, '');
-                }
+                this._settings.set_string(Keys.VIDEO_PATH, file?.get_path() ?? '');
+                this._updateSourceRow(row);
             } catch (e) {
                 logError(`Error selecting file: ${e}`);
             }
