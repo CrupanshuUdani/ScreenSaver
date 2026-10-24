@@ -35,6 +35,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         });
         playlistGroup.add(this._buildPlaylistOrderRow());
         playlistGroup.add(this._buildPlaylistStartRow());
+        playlistGroup.add(this._buildPlaylistFadeRow());
         this.add(playlistGroup);
 
         const mpvGroup = new Adw.PreferencesGroup({ title: 'Player' });
@@ -63,6 +64,36 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             model: Gtk.StringList.new(['First', 'Random', 'Last played']),
         });
         this._settings.bind(Keys.PLAYLIST_START, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildPlaylistFadeRow() {
+        const row = new Adw.ExpanderRow({
+            title: 'Fade between videos',
+            subtitle: 'Fades through black, hides the moment the next video loads',
+            show_enable_switch: true,
+        });
+        this._settings.bind(Keys.PLAYLIST_FADE_ENABLED, row, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
+
+        const durationRow = new Adw.SpinRow({
+            title: 'Fade duration',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 10000,
+                step_increment: 50,
+                value: this._settings.get_int(Keys.PLAYLIST_FADE_DURATION),
+            }),
+        });
+        durationRow.add_suffix(new Gtk.Label({
+            label: 'ms',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+        durationRow.connect('notify::value', r => {
+            this._settings.set_int(Keys.PLAYLIST_FADE_DURATION, r.get_value());
+        });
+
+        row.add_row(durationRow);
         return row;
     }
 

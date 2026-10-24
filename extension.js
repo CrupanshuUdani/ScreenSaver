@@ -150,7 +150,21 @@ export default class LockscreenExtension extends Extension {
                 this._mpris?.setTrack(path);
                 this._saveLastPlayed(path);
             },
+            onNext: () => this._switchVideo(() => this._player?.next()),
+            // The new video is ready, end the blackout started by _switchVideo()
+            onPlaybackRestart: () => this._renderer?.blackin(),
         });
+    }
+
+    /**
+     * Fades to black and loads new video with load() callback
+     * @param {() => void} load - Loads the other video, e.g. player.next()
+     */
+    _switchVideo(load) {
+        if (this._renderer)
+            this._renderer.blackout(load);
+        else
+            load();
     }
 
     async _setupRenderer(window) {
@@ -167,6 +181,9 @@ export default class LockscreenExtension extends Extension {
             promptAnimDuration: this._settings.get_int(Keys.PROMPT_BLUR_ANIM_DURATION),
             promptBlurBrightness: this._settings.get_double(Keys.PROMPT_BLUR_BRIGHTNESS),
             promptBlurRadius: this._settings.get_int(Keys.PROMPT_BLUR_RADIUS),
+            blackoutDuration: this._settings.get_boolean(Keys.PLAYLIST_FADE_ENABLED)
+                ? this._settings.get_int(Keys.PLAYLIST_FADE_DURATION)
+                : 0,
             onReady: this._onReady.bind(this),
         });
 
@@ -192,8 +209,8 @@ export default class LockscreenExtension extends Extension {
             onPause: pause,
             onStop: () => this._player?.stopImmediately(),
             onPlayPause: () => this._player?.isPaused() ? play() : pause(),
-            onNext: () => this._player?.next(),
-            onPrevious: () => this._player?.previous(),
+            onNext: () => this._switchVideo(() => this._player?.next()),
+            onPrevious: () => this._switchVideo(() => this._player?.previous()),
         });
         this._mpris.setTrack(this._player.currentFile);
     }

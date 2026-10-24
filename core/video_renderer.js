@@ -3,19 +3,24 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import St from 'gi://St';
 import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
+import GLib from 'gi://GLib';
 
 import { Direction } from '../enums.js';
 import { applyScaling } from '../utils/actors.js';
 import { SHELL_VERSION } from '../utils/shell_version.js';
 import { logWarn } from '../utils/logging.js';
+import { toColor } from '../utils/base.js';
 
 import { ActorAnimator } from '../helpers/actor_animator.js';
 
 const BLUR_EFFECT_NAME = 'lockscreen-extension-blur';
 const DESATURATE_EFFECT_NAME = 'lockscreen-extension-desaturate';
 
-//NOTE: Adding small delay to prevent stuttering of video
+// NOTE: Adding small delay to prevent stuttering of video
 const PROMPT_ANIM_DELAY = 5;
+// Keeps the screen black a bit longer after the new video is ready,
+// so video load spam doesn't cause blinking
+const BLACKIN_DELAY = 100;
 
 /**
  * Shows the player window as the lock screen background.
@@ -37,6 +42,7 @@ export class VideoRenderer {
         promptBlurRadius = 0,
         promptBlurBrightness = 1,
         promptAnimDuration = 0,
+        blackoutDuration = 0,
         onReady,
     }) {
         //NOTE: if w/h are 0 the window is not resized and the clone is not scaled
@@ -45,6 +51,8 @@ export class VideoRenderer {
 
         this._scalingMode = scalingMode;
         this._fadeInDuration = fadeInDuration;
+        // Fade to and from black when switching videos, 0 to switch without it
+        this._blackoutDuration = blackoutDuration;
 
         const themeContext = St.ThemeContext.get_for_stage(global.stage);
         this._blurRadius = blurRadius * themeContext.scale_factor;
@@ -55,6 +63,7 @@ export class VideoRenderer {
         this._grayscaleAnim = null;
         this._blurRadiusAnim = null;
         this._blurBrightnessAnim = null;
+        this._blackoutAnim = null;
         this._promptChangeBlur = promptChangeBlur;
 
         // Called once, when backgrounds for all monitors were created for the first time
@@ -62,6 +71,10 @@ export class VideoRenderer {
 
         this._wrapperActors = [];
         this._clones = [];
+        // Black actors above the wrappers, see blackout()
+        this._blackoutActors = [];
+        this._blackoutTimeoutId = 0;
+        this._pendingOnBlack = null; // Pending blackout callbacks
         this._backgroundCreated = false;
         this._promptShown = false;
 
@@ -82,6 +95,15 @@ export class VideoRenderer {
 
         const srcRadius = this._blurRadius;
         const srcBrightness = srcRadius ? this._blurBrightness : 1;
+
+        if (this._blackoutDuration > 0)
+            this._blackoutAnim = new ActorAnimator({
+                actors: [],
+                property: 'opacity',
+                from: 0,
+                to: 255,
+                duration: this._blackoutDuration,
+            });
 
         if (this._fadeInDuration > 0)
             this._fadeAnim = new ActorAnimator({
@@ -117,6 +139,9 @@ export class VideoRenderer {
         }
     }
 
+    /**
+     * NOTE: Only animators of the wrappers
+     */
     get _animators() {
         return [
             this._fadeAnim,
@@ -236,6 +261,7 @@ export class VideoRenderer {
         if (monitorIndex === 0) {
             this._wrapperActors = [];
             this._clones = [];
+            this._blackoutActors = [];
         }
 
         const wrapper = new Clutter.Actor();
@@ -287,6 +313,10 @@ export class VideoRenderer {
         wrapper.set_size(monitor.width, monitor.height);
         wrapper.set_clip_to_allocation(true);
 
+        // Only creating if relevant
+        if (this._blackoutAnim)
+            this._addBlackoutActor(monitor, backgroundGroup);
+
         if (this._hasSize()) {
             applyScaling(
                 cloneActor,
@@ -300,12 +330,36 @@ export class VideoRenderer {
 
         if (!isLastMonitor) return;
 
+        //NOTE: This part runs only when all monitors were updated
         this._animators.forEach(anim => anim?.rebind(this._wrapperActors));
+        this._blackoutAnim?.rebind(this._blackoutActors);
 
         if (!this._backgroundCreated) {
             this._backgroundCreated = true;
             this._onReady?.();
         }
+    }
+
+    /**
+     * Black actor covering the monitor, above the wrapper (not inside it),
+     * so the wrapper effects do not apply to it. Invisible until blackout()
+     */
+    _addBlackoutActor(monitor, backgroundGroup) {
+        const actor = new Clutter.Actor({
+            x: monitor.x,
+            y: monitor.y,
+            width: monitor.width,
+            height: monitor.height,
+            background_color: toColor('#000000'),
+            opacity: 0,
+        });
+        actor.connectObject('destroy', () => {
+            this._blackoutActors = this._blackoutActors.filter(a => a !== actor);
+        }, this);
+
+        backgroundGroup.add_child(actor);
+        backgroundGroup.set_child_above_sibling(actor, null);
+        this._blackoutActors.push(actor);
     }
 
     onPromptShown() {
@@ -340,13 +394,64 @@ export class VideoRenderer {
         this._fadeAnim?.pause();
     }
 
+    /**
+     * Fades the screen to black and once done calls the callback
+     *
+     * Calling it again during an ongoing blackout restarts it, 
+     * a pending callback of the previous call runs right away 
+     * so no switch gets lost
+     *
+     * @param {() => void} [onBlack] - Called once the screen is black, e.g. player.next()
+     */
+    blackout(onBlack) {
+        this._clearBlackoutTimeout();
+        this._pendingOnBlack?.();
+        this._pendingOnBlack = null;
+
+        // Fade disabled, switch right away
+        if (!this._blackoutAnim) {
+            onBlack?.();
+            return;
+        }
+
+        this._pendingOnBlack = onBlack ?? null;
+        this._blackoutAnim.play(Direction.FORWARD);
+
+        //NOTE:
+        // Timeout instead of a callback from ActorAnimator for simplicity
+        this._blackoutTimeoutId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT, this._blackoutDuration, () => {
+                this._pendingOnBlack?.();
+                this._pendingOnBlack = null;
+                this._blackoutTimeoutId = 0;
+                return GLib.SOURCE_REMOVE;
+            }
+        );
+    }
+
+    blackin() {
+        this._blackoutAnim?.play(Direction.BACKWARD, BLACKIN_DELAY);
+    }
+
+    _clearBlackoutTimeout() {
+        if (this._blackoutTimeoutId) {
+            GLib.source_remove(this._blackoutTimeoutId);
+            this._blackoutTimeoutId = 0;
+        }
+    }
+
     destroy() {
-        // Animators first, they hold transitions on the wrappers
+        this._clearBlackoutTimeout();
+        this._pendingOnBlack = null;
+
+        // Animators first, they hold transitions on the actors
         this._animators.forEach(anim => anim?.destroy());
         this._fadeAnim = null;
         this._grayscaleAnim = null;
         this._blurRadiusAnim = null;
         this._blurBrightnessAnim = null;
+        this._blackoutAnim?.destroy();
+        this._blackoutAnim = null;
 
         this._wrapperActors.forEach(actor => {
             actor.disconnectObject(this);
@@ -356,6 +461,12 @@ export class VideoRenderer {
         });
         this._wrapperActors = [];
         this._clones = [];
+
+        this._blackoutActors.forEach(actor => {
+            actor.disconnectObject(this);
+            actor.destroy();
+        });
+        this._blackoutActors = [];
         this._resetWindowActor();
 
         if (this._window) {

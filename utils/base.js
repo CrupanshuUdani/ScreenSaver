@@ -1,4 +1,6 @@
 import GObject from 'gi://GObject';
+import Clutter from 'gi://Clutter';
+import Cogl from 'gi://Cogl';
 
 const _timeoutIds = new Set();
 
@@ -62,4 +64,18 @@ export function toDouble(n) {
     v.init(GObject.TYPE_DOUBLE);
     v.set_double(n);
     return v;
-};
+}
+
+/**
+ * Converts a color hex into a color object
+ * (Clutter.Color up to GNOME 46, Cogl.Color from GNOME 47)
+ * @param {string} hex - Hex color like "#000000", does not accept color name
+ * @returns {Clutter.Color | Cogl.Color} The parsed color, fully transparent if it could not be parsed
+ */
+export function toColor(hex) {
+    //NOTE:
+    // Clutter.Color was replaced by Cogl.Color in GNOME 47.
+    // Cogl does not know color names like "black", only hex/rgb()
+    const [, color] = (Clutter.Color ?? Cogl.Color).from_string(hex);
+    return color;
+}

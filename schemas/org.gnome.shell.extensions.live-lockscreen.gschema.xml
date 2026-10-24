@@ -25,6 +25,15 @@
             <default>1</default>
             <summary>Which video to start with (0 - first, 1 - random, 2 - last played)</summary>
         </key>
+        <key name="playlist-fade-enabled" type="b">
+            <default>true</default>
+            <summary>Whether to fade through black when switching videos</summary>
+        </key>
+        <key name="playlist-fade-duration" type="i">
+            <range min="0" max="10000" />
+            <default>300</default>
+            <summary>Duration of the fade to and from black when switching videos (ms)</summary>
+        </key>
         <key name="playlist-last-played" type="s">
             <default>""</default>
             <summary>Path of the last played video, used when starting with the last played one</summary>

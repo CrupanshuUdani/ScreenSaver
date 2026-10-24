@@ -39,8 +39,8 @@ export class MpvPlayerProcess {
         playlist, actionOnEnd = ActionOnEnd.LOOP, 
         volume,
         useVideorate = false, framerate, 
-        onSizeChange, onPauseChange, onFileChange,
-        configPath, 
+        onSizeChange, onPauseChange, onFileChange, onNext, onPlaybackRestart,
+        configPath,
         profile = MpvProfile.QUALITY, customArgs = [],
     }) {
         // Unique per player, inside the user's private runtime dir (/run/user/<uid>)
@@ -64,6 +64,10 @@ export class MpvPlayerProcess {
         this._onSizeChange = onSizeChange;
         this._onPauseChange = onPauseChange;
         this._onFileChange = onFileChange;
+        //NOTE: If set, the caller must switch to next
+        this._onNext = onNext;
+        // First frame after loading a file (or seeking) is ready
+        this._onPlaybackRestart = onPlaybackRestart;
 
         this._proc = null;
         this._pid = null;
@@ -354,6 +358,9 @@ export class MpvPlayerProcess {
             if (data.name == 'eof-reached' && data.data === true) {
                 this._onVideoEnd();
             }
+            
+            if (data.event == 'playback-restart')
+                this._onPlaybackRestart?.();
         } catch(err) {
             logWarnMpv(`failed to handle "${line}". Reason: ${err}`)
         }
@@ -363,7 +370,12 @@ export class MpvPlayerProcess {
         //NOTE:
         // Loop is handled by mpv itself and pause keeps the last frame.
         // The order of the videos is up to the playlist
-        if (this._actionOnEnd === ActionOnEnd.NEXT)
+        if (this._actionOnEnd !== ActionOnEnd.NEXT)
+            return;
+
+        if (this._onNext)
+            this._onNext();
+        else
             this.next();
     }
 

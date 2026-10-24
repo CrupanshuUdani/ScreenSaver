@@ -7,6 +7,8 @@ export const Keys = {
 
     PLAYLIST_ORDER: "playlist-order",
     PLAYLIST_START: "playlist-start",
+    PLAYLIST_FADE_ENABLED: "playlist-fade-enabled",
+    PLAYLIST_FADE_DURATION: "playlist-fade-duration",
     PLAYLIST_LAST_PLAYED: "playlist-last-played",
 
     VIDEO_PATH: "background-video-path",
