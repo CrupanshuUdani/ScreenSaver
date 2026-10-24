@@ -339,9 +339,15 @@ class LLSGeneralPage extends Adw.PreferencesPage {
 
         const videoPath = this._settings.get_string(Keys.VIDEO_PATH);
         if (videoPath) {
-            const parent = Gio.File.new_for_path(videoPath).get_parent();
-            if (parent)
-                dialog.set_initial_folder(parent);
+            const file = Gio.File.new_for_path(videoPath);
+            const isFolder = file.query_file_type(
+                Gio.FileQueryInfoFlags.NONE, null
+            ) === Gio.FileType.DIRECTORY;
+
+            // A selected folder opens itself, a selected file opens the folder it is in
+            const initialFolder = isFolder ? file : file.get_parent();
+            if (initialFolder)
+                dialog.set_initial_folder(initialFolder);
         }
 
         const window = row.get_root();
