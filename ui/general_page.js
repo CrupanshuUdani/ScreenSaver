@@ -52,13 +52,12 @@ class LLSGeneralPage extends Adw.PreferencesPage {
     _buildEventsGroup() {
         const group = new Adw.PreferencesGroup({
             title: 'Events',
-            description: 'How the video reacts to what happens while the screen is locked',
         });
         group.add(this._buildActionOnEndRow());
         group.add(this._buildActionOnBlankRow());
         group.add(this._buildBatteryRow());
         group.add(this._buildFootnote(
-            'To keep the screen from blanking, use the ' +
+            'To keep the screen from blanking use the ' +
             '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
             'Unblank lock screen</a> extension.',
             { markup: true }

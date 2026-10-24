@@ -91,7 +91,7 @@ class LLSAppearancePage extends Adw.PreferencesPage {
     _buildVideoFadeRow() {
         const row = new Adw.ExpanderRow({
             title: 'Fade between videos',
-            subtitle: 'Fades through black when switching between videos',
+            subtitle: 'Briefly fade to black when switching to the next video',
             show_enable_switch: true,
         });
         this._settings.bind(Keys.PLAYLIST_FADE_ENABLED, row, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
