@@ -85,6 +85,7 @@ export class MpvPlayerProcess {
         this._transitionTimeoutId = null;
         this._currentVolume = volume;
         this._position = 0;
+        this._waitingFirstFrame = false;
 
         this._writeQueue = [];
         this._writing = false;
@@ -359,8 +360,25 @@ export class MpvPlayerProcess {
                 this._onVideoEnd();
             }
             
-            if (data.event == 'playback-restart')
+            if (data.event == 'end-file' && data.reason == 'error') {
+                logWarnMpv(`failed to play file: ${data.file_error ?? 'unknown error'}`);
+                this._waitingForFirstFrame = false;
+                // Signal to end the blackout
                 this._onPlaybackRestart?.();
+            }
+
+            if (data.event == 'file-loaded')
+                this._waitingFirstFrame = true;
+
+            // For now we only need to fire this signal once
+            // So only when we got the first frame
+            // file-loaded fires before the actual video decode, 
+            // so its too early
+            // playback-restart is the right signal here 
+            if (data.event == 'playback-restart' && this._waitingFirstFrame) {
+                this._waitingFirstFrame = false;
+                this._onPlaybackRestart?.();
+            }
         } catch(err) {
             logWarnMpv(`failed to handle "${line}". Reason: ${err}`)
         }
