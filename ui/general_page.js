@@ -8,6 +8,10 @@ import { Keys } from '../enums.js';
 import { logError } from '../utils/logging.js';
 import { listMediaFiles } from '../utils/media_files.js';
 
+function isDismissed(error) {
+    return error.matches(Gtk.DialogError, Gtk.DialogError.DISMISSED);
+}
+
 export var GeneralPage = GObject.registerClass(
 class LLSGeneralPage extends Adw.PreferencesPage {
     _init(settings) {
@@ -53,7 +57,12 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         group.add(this._buildActionOnEndRow());
         group.add(this._buildActionOnBlankRow());
         group.add(this._buildBatteryRow());
-        group.add(this._buildInfoLabel());
+        group.add(this._buildFootnote(
+            'To keep the screen from blanking, use the ' +
+            '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
+            'Unblank lock screen</a> extension.',
+            { markup: true }
+        ));
         return group;
     }
 
@@ -70,21 +79,34 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         toggleFpsRow();
         changeFramerateRow.connect('notify::active', toggleFpsRow);
 
-        group.add(this._buildMpvProfileNote());
+        group.add(this._buildFootnote(
+            'Efficient is still experimental and may cause issues ' +
+            'on some systems. Switch to Balanced if the video ' +
+            'does not show up or looks wrong.'
+        ));
         return group;
     }
 
     _buildAdvancedGroup() {
         const group = new Adw.PreferencesGroup({ title: 'Advanced' });
         group.add(this._buildMpvCustomArgsRow());
-        group.add(this._buildMpvCustomArgsNote());
+        group.add(this._buildFootnote(
+            'Incorrect parameters can break the extension. ' +
+            'If the video stops showing up, clear this field.'
+        ));
         return group;
     }
 
-    _buildMpvCustomArgsNote() {
+    /**
+     * Small dimmed text under the rows of a group
+     * @param {string} text
+     * @param {object} [options]
+     * @param {boolean} [options.markup] - Text contains Pango markup (e.g. links)
+     */
+    _buildFootnote(text, { markup = false } = {}) {
         return new Gtk.Label({
-            label: 'Incorrect parameters can break the extension. ' +
-                   'If the video stops showing up, clear this field.',
+            label: text,
+            use_markup: markup,
             css_classes: ['dim-label', 'caption'],
             wrap: true,
             xalign: 0,
@@ -157,20 +179,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         return row;
     }
 
-    _buildMpvProfileNote() {
-        return new Gtk.Label({
-            label: 'Colors may look slightly different between profiles. ' +
-                   'Efficient does not support transparency, ' +
-                   'transparent GIFs will get a black background.',
-            css_classes: ['dim-label', 'caption'],
-            wrap: true,
-            xalign: 0,
-            margin_top: 6,
-            margin_start: 12,
-            margin_end: 12,
-        });
-    }
-
     _buildMpvCustomArgsRow() {
         const toText = () => this._settings.get_strv(Keys.MPV_CUSTOM_ARGS)
             .map(arg => GLib.shell_quote(arg))
@@ -199,19 +207,13 @@ class LLSGeneralPage extends Adw.PreferencesPage {
     }
 
     _buildScalingRow() {
+        // Order matches ScalingMode
         const row = new Adw.ComboRow({
             title: 'Scaling mode',
             subtitle: 'How the video is scaled to fit the screen',
-            model: new Gtk.StringList({
-                strings: ['Stretch', 'Fit', 'Cover'],
-            }),
+            model: Gtk.StringList.new(['Stretch', 'Fit', 'Cover']),
         });
-
-        row.set_selected(this._settings.get_int(Keys.SCALING_MODE));
-        row.connect('notify::selected', r => {
-            this._settings.set_int(Keys.SCALING_MODE, r.selected);
-        });
-
+        this._settings.bind(Keys.SCALING_MODE, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
@@ -310,10 +312,17 @@ class LLSGeneralPage extends Adw.PreferencesPage {
      */
     _updateSourceRow(row) {
         const path = this._settings.get_string(Keys.VIDEO_PATH);
-        row.subtitle = path !== '' ? path : 'None';
 
         const isFolder = path !== '' && Gio.File.new_for_path(path)
             .query_file_type(Gio.FileQueryInfoFlags.NONE, null) === Gio.FileType.DIRECTORY;
+
+        // Trailing slash only in the UI, so folders are easy to tell apart from files
+        if (path === '')
+            row.subtitle = 'None';
+        else if (isFolder && !path.endsWith('/'))
+            row.subtitle = `${path}/`;
+        else
+            row.subtitle = path;
 
         const count = isFolder ? listMediaFiles(path).length : 0;
         this._sourceCountLabel.visible = isFolder;
@@ -323,21 +332,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             row.add_css_class('error');
         else
             row.remove_css_class('error');
-    }
-
-    _buildInfoLabel() {
-        return new Gtk.Label({
-            label: 'To keep the screen from blanking, use the ' +
-                   '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
-                   'Unblank lock screen</a> extension.',
-            use_markup: true,
-            css_classes: ['dim-label', 'caption'],
-            wrap: true,
-            xalign: 0,
-            margin_top: 6,
-            margin_start: 12,
-            margin_end: 12,
-        });
     }
 
     _openFolderDialog(row) {
@@ -357,7 +351,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
                 this._settings.set_string(Keys.VIDEO_PATH, folder?.get_path() ?? '');
                 this._updateSourceRow(row);
             } catch (e) {
-                logError(`Error selecting folder: ${e}`);
+                if (!isDismissed(e))
+                    logError(`Error selecting folder: ${e}`);
             }
         });
     }
@@ -401,7 +396,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
                 this._settings.set_string(Keys.VIDEO_PATH, file?.get_path() ?? '');
                 this._updateSourceRow(row);
             } catch (e) {
-                logError(`Error selecting file: ${e}`);
+                if (!isDismissed(e))
+                    logError(`Error selecting file: ${e}`);
             }
         });
     }

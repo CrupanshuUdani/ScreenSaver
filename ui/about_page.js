@@ -84,7 +84,7 @@ class LLSAboutPage extends Adw.PreferencesPage {
 
     _buildLinksGroup() {
         const group = new Adw.PreferencesGroup({ title: "Links" });
-        //NOTE: Honestly just hardcoding links is fine 
+        //NOTE: Honestly just hardcoding links is fine
         const links = [
             {
                 title: "Source Code",
@@ -102,7 +102,7 @@ class LLSAboutPage extends Adw.PreferencesPage {
                 title: "Support the Developer",
                 subtitle: "Become a sponsor on GitHub",
                 icon: "emblem-favorite-symbolic",
-                url: "https://github.com/sponsors/nick-redwill", 
+                url: "https://github.com/sponsors/nick-redwill",
             },
         ];
 

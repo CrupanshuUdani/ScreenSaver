@@ -69,7 +69,7 @@ class LLSAppearancePage extends Adw.PreferencesPage {
             subtitle: 'Video fade-in animation duration',
             adjustment: new Gtk.Adjustment({
                 lower: 0,
-                upper: 600 * 1000,
+                upper: 600000,
                 step_increment: 100,
                 value: this._settings.get_int(Keys.FADE_IN_DURATION),
             }),
@@ -91,7 +91,7 @@ class LLSAppearancePage extends Adw.PreferencesPage {
     _buildVideoFadeRow() {
         const row = new Adw.ExpanderRow({
             title: 'Fade between videos',
-            subtitle: 'Fades through black when a folder switches to the next video',
+            subtitle: 'Fades through black when switching between videos',
             show_enable_switch: true,
         });
         this._settings.bind(Keys.PLAYLIST_FADE_ENABLED, row, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
