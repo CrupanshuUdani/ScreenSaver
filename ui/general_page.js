@@ -1,10 +1,16 @@
 import Adw from 'gi://Adw';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import GObject from 'gi://GObject';
 
 import { Keys } from '../enums.js';
 import { logError } from '../utils/logging.js';
+import { listMediaFiles } from '../utils/media_files.js';
+
+function isDismissed(error) {
+    return error.matches(Gtk.DialogError, Gtk.DialogError.DISMISSED);
+}
 
 export var GeneralPage = GObject.registerClass(
 class LLSGeneralPage extends Adw.PreferencesPage {
@@ -16,52 +22,197 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         });
 
         this._settings = settings;
-        this._forceGif = settings.get_boolean(Keys.DEBUG_FORCE_GIF_SUPPORT, false);
 
-        this.add(this._buildBackendNoticeGroup());
-
-        const group = new Adw.PreferencesGroup();
-        group.add(this._buildPathRow());
-        group.add(this._buildScalingRow());
-        group.add(this._buildVolumeRow());
-        group.add(this._buildLoopRow());
-        group.add(this._buildBatteryRow());
-        group.add(this._buildActionOnBlankRow());
-        group.add(this._buildInfoLabel());
-        this.add(group);
+        this.add(this._buildVideoGroup());
+        this.add(this._buildPlaylistGroup());
+        this.add(this._buildEventsGroup());
+        this.add(this._buildPerformanceGroup());
+        this.add(this._buildAdvancedGroup());
     }
 
-    _buildBackendNoticeGroup() {
+    _buildVideoGroup() {
         const group = new Adw.PreferencesGroup();
-
-        const row = new Adw.ActionRow({
-            title: 'GStreamer playback is being retired',
-            subtitle:
-                `Install MPV for better reliability and continued support.\n\n` +
-                `If you run into issues with MPV, please report them. ` +
-                `You can force GStreamer playback in debug settings in the meantime.`,
-            icon_name: 'dialog-warning-symbolic',
-        });
-        row.add_css_class('warning');
-
-        group.add(row);
+        group.add(this._buildSourceRow());
+        group.add(this._buildScalingRow());
+        group.add(this._buildVolumeRow());
+        group.add(this._buildMprisRow());
         return group;
     }
 
-    _buildScalingRow() {
-        const row = new Adw.ComboRow({
-            title: 'Scaling mode',
-            subtitle: 'How the video is scaled to fit the screen',
-            model: new Gtk.StringList({
-                strings: ['Stretch', 'Fit', 'Cover'],
+    _buildPlaylistGroup() {
+        const group = new Adw.PreferencesGroup({
+            title: 'Playlist',
+            description: 'Only used when a folder is selected',
+        });
+        group.add(this._buildPlaylistOrderRow());
+        group.add(this._buildPlaylistStartRow());
+        return group;
+    }
+
+    _buildEventsGroup() {
+        const group = new Adw.PreferencesGroup({
+            title: 'Events',
+        });
+        group.add(this._buildActionOnEndRow());
+        group.add(this._buildActionOnBlankRow());
+        group.add(this._buildBatteryRow());
+        group.add(this._buildFootnote(
+            'To keep the screen from blanking use the ' +
+            '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
+            'Unblank lock screen</a> extension.',
+            { markup: true }
+        ));
+        return group;
+    }
+
+    _buildPerformanceGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Performance' });
+        group.add(this._buildMpvProfileRow());
+
+        const changeFramerateRow = this._buildChangeFramerateRow();
+        const fpsRow = this._buildFpsRow();
+        group.add(changeFramerateRow);
+        group.add(fpsRow);
+
+        const toggleFpsRow = () => fpsRow.set_visible(changeFramerateRow.active);
+        toggleFpsRow();
+        changeFramerateRow.connect('notify::active', toggleFpsRow);
+
+        group.add(this._buildFootnote(
+            'Efficient is still experimental and may cause issues ' +
+            'on some systems. Switch to Balanced if the video ' +
+            'does not show up or looks wrong.'
+        ));
+        return group;
+    }
+
+    _buildAdvancedGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Advanced' });
+        group.add(this._buildMpvCustomArgsRow());
+        group.add(this._buildFootnote(
+            'Incorrect parameters can break the extension. ' +
+            'If the video stops showing up, clear this field.'
+        ));
+        return group;
+    }
+
+    /**
+     * Small dimmed text under the rows of a group
+     * @param {string} text
+     * @param {object} [options]
+     * @param {boolean} [options.markup] - Text contains Pango markup (e.g. links)
+     */
+    _buildFootnote(text, { markup = false } = {}) {
+        return new Gtk.Label({
+            label: text,
+            use_markup: markup,
+            css_classes: ['dim-label', 'caption'],
+            wrap: true,
+            xalign: 0,
+            margin_top: 6,
+            margin_start: 12,
+            margin_end: 12,
+        });
+    }
+
+    _buildChangeFramerateRow() {
+        const row = new Adw.SwitchRow({
+            title: 'Change framerate',
+        });
+        this._settings.bind(Keys.USE_VIDEORATE, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildFpsRow() {
+        const row = new Adw.SpinRow({
+            title: 'Framerate',
+            adjustment: new Gtk.Adjustment({
+                lower: 1,
+                upper: 120,
+                step_increment: 1,
+                value: this._settings.get_int(Keys.FRAMERATE),
             }),
         });
 
-        row.set_selected(this._settings.get_int(Keys.SCALING_MODE));
-        row.connect('notify::selected', r => {
-            this._settings.set_int(Keys.SCALING_MODE, r.selected);
+        row.add_suffix(new Gtk.Label({
+            label: 'fps',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+
+        row.connect('notify::value', r => {
+            this._settings.set_int(Keys.FRAMERATE, r.get_value());
         });
 
+        return row;
+    }
+
+    _buildPlaylistOrderRow() {
+        // Order matches PlaylistOrder
+        const row = new Adw.ComboRow({
+            title: 'Order',
+            model: Gtk.StringList.new(['Sequential', 'Shuffle', 'Random']),
+        });
+        this._settings.bind(Keys.PLAYLIST_ORDER, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildPlaylistStartRow() {
+        // Order matches PlaylistStart
+        const row = new Adw.ComboRow({
+            title: 'Start with',
+            model: Gtk.StringList.new(['First', 'Random', 'Last played']),
+        });
+        this._settings.bind(Keys.PLAYLIST_START, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildMpvProfileRow() {
+        // Order matches MpvProfile
+        const row = new Adw.ComboRow({
+            title: 'Playback profile',
+            subtitle: 'Balanced and Efficient use less GPU at the cost of image quality',
+            model: Gtk.StringList.new(['Quality', 'Balanced', 'Efficient']),
+        });
+        this._settings.bind(Keys.MPV_PROFILE, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildMpvCustomArgsRow() {
+        const toText = () => this._settings.get_strv(Keys.MPV_CUSTOM_ARGS)
+            .map(arg => GLib.shell_quote(arg))
+            .join(' ');
+
+        const row = new Adw.EntryRow({
+            title: 'Custom MPV arguments (e.g. --deband=yes)',
+            text: toText(),
+            show_apply_button: true,
+        });
+
+        // Split like a shell would, so quoted values with spaces stay one argument
+        row.connect('apply', r => {
+            const text = r.get_text().trim();
+            try {
+                const args = text ? GLib.shell_parse_argv(text)[1] : [];
+                this._settings.set_strv(Keys.MPV_CUSTOM_ARGS, args);
+                r.remove_css_class('error');
+            } catch (e) {
+                r.add_css_class('error');
+                logError(`Invalid custom MPV arguments: ${e.message}`);
+            }
+        });
+
+        return row;
+    }
+
+    _buildScalingRow() {
+        // Order matches ScalingMode
+        const row = new Adw.ComboRow({
+            title: 'Scaling mode',
+            subtitle: 'How the video is scaled to fit the screen',
+            model: Gtk.StringList.new(['Stretch', 'Fit', 'Cover']),
+        });
+        this._settings.bind(Keys.SCALING_MODE, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
@@ -89,61 +240,125 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         return row;
     }
 
-    _buildLoopRow() {
-        const row = new Adw.SwitchRow({ title: 'Loop video' });
-        this._settings.bind(Keys.LOOPED, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+    _buildActionOnEndRow() {
+        const row = new Adw.ComboRow({
+            title: 'On video end',
+            subtitle: 'What to do when the video finishes playing',
+            model: Gtk.StringList.new(['Loop', 'Pause', 'Next video']),
+        });
+        this._settings.bind(Keys.ACTION_ON_END, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
     _buildBatteryRow() {
-        const row = new Adw.SwitchRow({ title: 'Disable on battery' });
-        this._settings.bind(Keys.DISABLE_ON_BATTERY, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        const row = new Adw.SwitchRow({ title: 'Pause on battery' });
+        this._settings.bind(Keys.PAUSE_ON_BATTERY, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildMprisRow() {
+        const row = new Adw.SwitchRow({
+            title: 'Media controls',
+            subtitle: 'Control the video with media keys and other MPRIS clients',
+        });
+        this._settings.bind(Keys.MPRIS_ENABLED, row, 'active', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
     _buildActionOnBlankRow() {
         const row = new Adw.ComboRow({
             title: 'Action on blank',
-            subtitle: 'What to do with the video when the screen goes black',
-            model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video']),
+            subtitle: 'What to do when the screen goes black',
+            model: Gtk.StringList.new(['Ignore', 'Pause video', 'Restart video', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_BLANK, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 
-    _buildPathRow() {
-        const path = this._settings.get_string(Keys.VIDEO_PATH);
-
-        const row = new Adw.ActionRow({
-            title: 'File',
-            subtitle: path !== '' ? path : 'None',
-        });
+    _buildSourceRow() {
+        const row = new Adw.ActionRow({ title: 'Source' });
         row.set_use_markup(false);
 
-        const button = new Adw.ButtonContent({
-            icon_name: 'document-open-symbolic',
-            label: 'Browse',
+        // Number of playable files, only shown for folders
+        this._sourceCountLabel = new Gtk.Label({
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
         });
+        row.add_suffix(this._sourceCountLabel);
 
-        row.activatable_widget = button;
-        row.add_suffix(button);
-        row.connect('activated', () => this._openFileDialog(row));
+        const fileButton = new Gtk.Button({
+            label: 'Choose File',
+            valign: Gtk.Align.CENTER,
+        });
+        fileButton.connect('clicked', () => this._openFileDialog(row));
 
+        const folderButton = new Gtk.Button({
+            label: 'Choose Folder',
+            valign: Gtk.Align.CENTER,
+        });
+        folderButton.connect('clicked', () => this._openFolderDialog(row));
+
+        row.add_suffix(fileButton);
+        row.add_suffix(folderButton);
+
+        this._updateSourceRow(row);
         return row;
     }
 
-    _buildInfoLabel() {
-        return new Gtk.Label({
-            label: 'To keep the screen from blanking, use the ' +
-                   '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
-                   'Unblank lock screen</a> extension.',
-            use_markup: true,
-            css_classes: ['dim-label', 'caption'],
-            wrap: true,
-            xalign: 0,
-            margin_top: 6,
-            margin_start: 12,
-            margin_end: 12,
+    /**
+     * Shows the saved path, and for folders the number of playable files.
+     * A folder without any is marked as an error
+     */
+    _updateSourceRow(row) {
+        const path = this._settings.get_string(Keys.VIDEO_PATH);
+
+        const isFolder = path !== '' && Gio.File.new_for_path(path)
+            .query_file_type(Gio.FileQueryInfoFlags.NONE, null) === Gio.FileType.DIRECTORY;
+
+        // Trailing slash only in the UI, so folders are easy to tell apart from files
+        if (path === '')
+            row.subtitle = 'None';
+        else if (isFolder && !path.endsWith('/'))
+            row.subtitle = `${path}/`;
+        else
+            row.subtitle = path;
+
+        const count = isFolder ? listMediaFiles(path).length : 0;
+        this._sourceCountLabel.visible = isFolder;
+        this._sourceCountLabel.label = count === 1 ? '1 file' : `${count} files`;
+
+        if (isFolder && count === 0)
+            row.add_css_class('error');
+        else
+            row.remove_css_class('error');
+    }
+
+    _openFolderDialog(row) {
+        const dialog = new Gtk.FileDialog({ title: 'Select Folder with Videos or GIFs' });
+
+        const videoPath = this._settings.get_string(Keys.VIDEO_PATH);
+        if (videoPath) {
+            const file = Gio.File.new_for_path(videoPath);
+            const isFolder = file.query_file_type(
+                Gio.FileQueryInfoFlags.NONE, null
+            ) === Gio.FileType.DIRECTORY;
+
+            // A selected folder opens itself, a selected file opens the folder it is in
+            const initialFolder = isFolder ? file : file.get_parent();
+            if (initialFolder)
+                dialog.set_initial_folder(initialFolder);
+        }
+
+        const window = row.get_root();
+        dialog.select_folder(window, null, (d, result) => {
+            try {
+                const folder = d.select_folder_finish(result);
+                this._settings.set_string(Keys.VIDEO_PATH, folder?.get_path() ?? '');
+                this._updateSourceRow(row);
+            } catch (e) {
+                if (!isDismissed(e))
+                    logError(`Error selecting folder: ${e}`);
+            }
         });
     }
 
@@ -183,15 +398,11 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         dialog.open(window, null, (d, result) => {
             try {
                 const file = d.open_finish(result);
-                if (file) {
-                    row.subtitle = file.get_path();
-                    this._settings.set_string(Keys.VIDEO_PATH, file.get_path());
-                } else {
-                    row.subtitle = 'None';
-                    this._settings.set_string(Keys.VIDEO_PATH, '');
-                }
+                this._settings.set_string(Keys.VIDEO_PATH, file?.get_path() ?? '');
+                this._updateSourceRow(row);
             } catch (e) {
-                logError(`Error selecting file: ${e}`);
+                if (!isDismissed(e))
+                    logError(`Error selecting file: ${e}`);
             }
         });
     }

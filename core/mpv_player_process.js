@@ -3,6 +3,7 @@ import GLib from 'gi://GLib';
 
 import { logError, logWarn } from '../utils/logging.js';
 import { sleep } from '../utils/base.js';
+import { ActionOnEnd, MpvProfile } from '../enums.js';
 
 const logErrorMpv = (msg) => logError(`MpvPlayerProcess: ${msg}`);
 const logWarnMpv = (msg) => logWarn(`MpvPlayerProcess: ${msg}`);
@@ -22,23 +23,51 @@ Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async', 'communicate_
 Gio._promisify(Gio.DataInputStream.prototype, 'read_line_async', 'read_line_finish');
 Gio._promisify(Gio.OutputStream.prototype, 'write_bytes_async', 'write_bytes_finish');
 
-// This number is meant to match the animation 
-// duration of lockscreen widgets + some ipc overhead 
-const FADE_DURATION_MS = 280; 
+// This number is meant to match the animation
+// duration of lockscreen widgets + some ipc overhead
+const FADE_DURATION_MS = 280;
+
+// Profile names as defined in external/mpv.conf
+const PROFILE_NAMES = {
+    [MpvProfile.QUALITY]: 'quality',
+    [MpvProfile.BALANCED]: 'balanced',
+    [MpvProfile.EFFICIENT]: 'efficient',
+};
 
 export class MpvPlayerProcess {
-    constructor({ 
-        videoPath, scalingMode, loop, volume, 
+    constructor({
+        playlist, actionOnEnd = ActionOnEnd.LOOP, 
+        volume,
         useVideorate = false, framerate, 
+        onSizeChange, onPauseChange, onFileChange, onNext, onPlaybackRestart,
+        configPath,
+        profile = MpvProfile.QUALITY, customArgs = [],
     }) {
-        this._socketPath = '/tmp/lls-mpv.sock';
+        // Unique per player, inside the user's private runtime dir (/run/user/<uid>)
+        this._socketPath = GLib.build_filenamev([
+            GLib.get_user_runtime_dir(),
+            `live-lockscreen-mpv-${GLib.uuid_string_random()}.sock`,
+        ]);
 
-        this._videoPath = videoPath;
-        this._scalingMode = scalingMode;
-        this._loop = loop;
+        this._configPath = configPath;
+        this._profile = profile;
+        this._customArgs = customArgs;
+
+        this._playlist = playlist;
+        this._actionOnEnd = actionOnEnd;
+        this._shouldPlay = false;
+        this._paused = true;
         this._volume = volume;
         this._useVideorate = useVideorate;
         this._framerate = framerate;
+
+        this._onSizeChange = onSizeChange;
+        this._onPauseChange = onPauseChange;
+        this._onFileChange = onFileChange;
+        //NOTE: If set, the caller must switch to next
+        this._onNext = onNext;
+        // First frame after loading a file (or seeking) is ready
+        this._onPlaybackRestart = onPlaybackRestart;
 
         this._proc = null;
         this._pid = null;
@@ -53,10 +82,10 @@ export class MpvPlayerProcess {
         this._shuttingDown = false;
         this._reconnecting = false;
         
-
         this._transitionTimeoutId = null;
         this._currentVolume = volume;
         this._position = 0;
+        this._waitingFirstFrame = false;
 
         this._writeQueue = [];
         this._writing = false;
@@ -67,38 +96,41 @@ export class MpvPlayerProcess {
     }
 
     async run() {
-        this._removeSocketFile();
+        if (!this._configPath || !GLib.file_test(this._configPath, GLib.FileTest.IS_REGULAR))
+            throw new MpvError(`mpv config not found at "${this._configPath}"`);
 
         const transparencyArg = await this._getTransparencyArg();
 
+        // User configs are skipped, everything comes from our own config file
         const args = [
-            'mpv', 
-            '--title=LiveLockScreen',
-            '--pause=yes',
-            '--stop-screensaver=no',
-            `--input-ipc-server=${this._socketPath}`, 
-            this._videoPath,
+            'mpv',
             '--no-config',
-            '--keepaspect=no',
-            '--hwdec=auto',
-            '--vo=gpu-next',
-            '--no-border',
-            '--keep-open=yes',
-            '--osd-level=0',
-            '--msg-level=all=no',
-            '--audio-buffer=0.1', //NOTE: prevents audio artifacts on fade
-            '--no-terminal',
-            `--volume=${Math.round(this._volume * 100)}`
+            `--include=${this._configPath}`,
+            `--profile=${this._resolveProfileName()}`,
+            ...this._filterCustomArgs(this._customArgs),
         ];
+
+        //NOTE:
+        // Options below come after the custom args on purpose (last one wins in mpv),
+        // the player logic depends on them
+        args.push(
+            '--pause=yes',
+            '--keep-open=yes',
+            `--input-ipc-server=${this._socketPath}`,
+            `--volume=${Math.round(this._volume * 100)}`
+        );
 
         if (transparencyArg)
             args.push(transparencyArg);
 
-        if (this._loop)
+        if (this._actionOnEnd === ActionOnEnd.LOOP)
             args.push('--loop');
 
         if (this._useVideorate)
             args.push(`--vf=fps=${this._framerate}`);
+
+        // "--" so a file name starting with "-" is not parsed as an option
+        args.push('--', this._playlist.current());
 
         this._proc = Gio.Subprocess.new(
             args, 
@@ -107,6 +139,24 @@ export class MpvPlayerProcess {
         this._pid = parseInt(this._proc.get_identifier());
 
         await this._waitForSocketAndConnect(this._socketPath);
+    }
+
+    _resolveProfileName() {
+        return PROFILE_NAMES[this._profile] ?? PROFILE_NAMES[MpvProfile.QUALITY];
+    }
+
+    /**
+     * Only options are allowed, anything else would be added
+     * to the playlist by mpv as a file to play
+     */
+    _filterCustomArgs(customArgs) {
+        return customArgs.filter(arg => {
+            if (arg.startsWith('--') && arg.length > 2)
+                return true;
+
+            logWarnMpv(`ignoring custom argument "${arg}", only --options are allowed`);
+            return false;
+        });
     }
 
     async _getTransparencyArg() {
@@ -174,6 +224,7 @@ export class MpvPlayerProcess {
 
             if (file.query_exists(null)) {
                 await this._connectIpc(socketPath);
+                this._observeProperties();
                 this._startReadLoop().catch(err => logErrorMpv(
                     `read loop crashed: ${err}`
                 ));
@@ -183,6 +234,19 @@ export class MpvPlayerProcess {
             await sleep(50);
         }
         throw new MpvError('timed out waiting for mpv IPC socket to appear');
+    }
+
+    _observeProperties() {
+        // Observers belong to the IPC connection, so they have to be
+        // registered again every time we reconnect
+        this._queueCommand('observe_property', 1, 'playback-time');
+        this._queueCommand('observe_property', 2, 'eof-reached');
+        this._queueCommand('observe_property', 3, 'video-params');
+        this._queueCommand('observe_property', 4, 'pause');
+    }
+
+    isPaused() {
+        return this._paused;
     }
 
     _queueCommand(...args) {
@@ -273,22 +337,92 @@ export class MpvPlayerProcess {
             const data = JSON.parse(line);
 
             if (data.data && data.data.w && data.data.h) {
-                this.w = data.data.w;
-                this.h = data.data.h;
+                if (this.w != data.data.w || this.h != data.data.h) {
+                    this.w = data.data.w;
+                    this.h = data.data.h;
+                    this._onSizeChange?.(this.w, this.h);
+                }
             }
 
             if (data.name == 'playback-time' && data.data) {
                 this._position = data.data;
             }
 
-            // Retrieve video params on initial load
-            if (data.event == "file-loaded") {
-                this._queueCommand('observe_property', 1, 'playback-time');
-                this._queueCommand('get_property', 'video-params');
+            if (data.name == 'pause') {
+                this._paused = data.data;
+                this._onPauseChange?.(data.data);
+            }
+
+            //NOTE: 
+            // With --keep-open mpv doesn't send "end-file" when the video 
+            // finishes, it just sets eof-reached instead
+            if (data.name == 'eof-reached' && data.data === true) {
+                this._onVideoEnd();
+            }
+            
+            if (data.event == 'end-file' && data.reason == 'error') {
+                logWarnMpv(`failed to play file: ${data.file_error ?? 'unknown error'}`);
+                this._waitingForFirstFrame = false;
+                // Signal to end the blackout
+                this._onPlaybackRestart?.();
+            }
+
+            if (data.event == 'file-loaded')
+                this._waitingFirstFrame = true;
+
+            // For now we only need to fire this signal once
+            // So only when we got the first frame
+            // file-loaded fires before the actual video decode, 
+            // so its too early
+            // playback-restart is the right signal here 
+            if (data.event == 'playback-restart' && this._waitingFirstFrame) {
+                this._waitingFirstFrame = false;
+                this._onPlaybackRestart?.();
             }
         } catch(err) {
             logWarnMpv(`failed to handle "${line}". Reason: ${err}`)
         }
+    }
+
+    _onVideoEnd() {
+        //NOTE:
+        // Loop is handled by mpv itself and pause keeps the last frame.
+        // The order of the videos is up to the playlist
+        if (this._actionOnEnd !== ActionOnEnd.NEXT)
+            return;
+
+        if (this._onNext)
+            this._onNext();
+        else
+            this.next();
+    }
+
+    _loadFile(path) {
+        this._queueCommand('loadfile', path, 'replace');
+
+        // mpv keeps the pause state across files, this is just in case
+        if (this._shouldPlay)
+            this._queueCommand('set_property', 'pause', 'no');
+
+        this._onFileChange?.(path);
+    }
+
+    get currentFile() {
+        return this._playlist.current();
+    }
+
+    get hasMultipleVideos() {
+        return this._playlist.size > 1;
+    }
+
+    next() {
+        this._playlist.increment();
+        this._loadFile(this._playlist.current());
+    }
+
+    previous() {
+        this._playlist.decrement();
+        this._loadFile(this._playlist.current());
     }
 
     _cleanupIpc() {
@@ -365,11 +499,13 @@ export class MpvPlayerProcess {
     }
 
     play() {
+        this._shouldPlay = true;
         this._queueCommand('set_property', 'pause', 'no');
         this._fade('in');
     }
 
     pause() {
+        this._shouldPlay = false;
         this._fade('out', () => {
             this._queueCommand('set_property', 'pause', 'yes');
         });
@@ -381,24 +517,36 @@ export class MpvPlayerProcess {
     }
 
     pauseImmediately() {
+        this._shouldPlay = false;
         this._clearTransitionTimeout();
         this._queueCommand('set_property', 'pause', 'yes');
         this._lastSettledGain = 0;
         this._fadeStartedAtMs = null;
     }
 
+    _isOwnWindow(windowActor) {
+        return windowActor.get_meta_window()?.get_pid() === this._pid;
+    }
+
     async waitForWindow(timeoutMs) {
+        //NOTE:
+        // Sometimes (e.g. when using dmabuf-wayland) window can be mapped before
+        // this is called, and 'map' is not emitted again. Check existing windows first
+        const existing = global.get_window_actors().find(a => this._isOwnWindow(a));
+        if (existing) {
+            this._window = existing.get_meta_window();
+            return this._window;
+        }
+
         return new Promise((resolve, reject) => {
             this._mapId = global.window_manager.connectObject(
                 'map',
                 (_wm, windowActor) => {
-                    const win = windowActor.get_meta_window();
-
-                    if (win.get_pid() !== this._pid)
+                    if (!this._isOwnWindow(windowActor))
                         return;
 
-                    this._window = win;
-                    resolve(win);
+                    this._window = windowActor.get_meta_window();
+                    resolve(this._window);
 
                     global.window_manager.disconnectObject(this);
 

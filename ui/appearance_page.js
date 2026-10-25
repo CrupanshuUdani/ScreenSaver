@@ -15,23 +15,16 @@ class LLSAppearancePage extends Adw.PreferencesPage {
         });
 
         this._settings = settings;
-        this.add(this._buildGroup());
+
+        this.add(this._buildBackgroundGroup());
+        this.add(this._buildPromptGroup());
     }
 
-    _buildGroup() {
-        const group = new Adw.PreferencesGroup();
-
-        const changeFramerateRow = this._buildChangeFramerateRow();
-        const fpsRow = this._buildFpsRow();
-
-        group.add(changeFramerateRow);
-        group.add(fpsRow);
-
-        const toggleFpsRow = () => fpsRow.set_visible(changeFramerateRow.active);
-        toggleFpsRow();
-        changeFramerateRow.connect('notify::active', toggleFpsRow);
+    _buildBackgroundGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Background' });
 
         group.add(this._buildFadeInRow());
+        group.add(this._buildVideoFadeRow());
 
         const blurRadiusRow = this._buildBlurRadiusRow();
         const blurBrightnessRow = this._buildBlurBrightnessRow();
@@ -55,37 +48,19 @@ class LLSAppearancePage extends Adw.PreferencesPage {
         return group;
     }
 
-    _buildChangeFramerateRow() {
-        const row = new Adw.SwitchRow({
-            title: 'Change framerate',
-            subtitle: 'This may cause artifacts and performance issues due to conversion overhead',
-        });
-        this._settings.bind(Keys.USE_VIDEORATE, row, 'active', Gio.SettingsBindFlags.DEFAULT);
-        return row;
-    }
-
-    _buildFpsRow() {
-        const row = new Adw.SpinRow({
-            title: 'Framerate',
-            adjustment: new Gtk.Adjustment({
-                lower: 1,
-                upper: 120,
-                step_increment: 1,
-                value: this._settings.get_int(Keys.FRAMERATE),
-            }),
+    _buildPromptGroup() {
+        const group = new Adw.PreferencesGroup({
+            title: 'Password prompt',
+            description: 'Customize behavior when the password prompt appears',
         });
 
-        row.add_suffix(new Gtk.Label({
-            label: 'fps',
-            valign: Gtk.Align.CENTER,
-            css_classes: ['dim-label'],
-        }));
+        group.add(this._buildPromptPauseRow());
+        group.add(this._buildPromptGrayscaleRow());
+        group.add(this._buildPromptChangeBlurRow());
+        // Also used by grayscale, so not inside the blur row
+        group.add(this._buildPromptAnimDurationRow());
 
-        row.connect('notify::value', r => {
-            this._settings.set_int(Keys.FRAMERATE, r.get_value());
-        });
-
-        return row;
+        return group;
     }
 
     _buildFadeInRow() {
@@ -94,7 +69,7 @@ class LLSAppearancePage extends Adw.PreferencesPage {
             subtitle: 'Video fade-in animation duration',
             adjustment: new Gtk.Adjustment({
                 lower: 0,
-                upper: 600 * 1000,
+                upper: 600000,
                 step_increment: 100,
                 value: this._settings.get_int(Keys.FADE_IN_DURATION),
             }),
@@ -110,6 +85,36 @@ class LLSAppearancePage extends Adw.PreferencesPage {
             this._settings.set_int(Keys.FADE_IN_DURATION, r.get_value());
         });
 
+        return row;
+    }
+
+    _buildVideoFadeRow() {
+        const row = new Adw.ExpanderRow({
+            title: 'Fade between videos',
+            subtitle: 'Briefly fade to black when switching to the next video',
+            show_enable_switch: true,
+        });
+        this._settings.bind(Keys.PLAYLIST_FADE_ENABLED, row, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
+
+        const durationRow = new Adw.SpinRow({
+            title: 'Fade duration',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 10000,
+                step_increment: 50,
+                value: this._settings.get_int(Keys.PLAYLIST_FADE_DURATION),
+            }),
+        });
+        durationRow.add_suffix(new Gtk.Label({
+            label: 'ms',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+        durationRow.connect('notify::value', r => {
+            this._settings.set_int(Keys.PLAYLIST_FADE_DURATION, r.get_value());
+        });
+
+        row.add_row(durationRow);
         return row;
     }
 
@@ -150,6 +155,97 @@ class LLSAppearancePage extends Adw.PreferencesPage {
             css_classes: ['dim-label'],
         }));
 
+        return row;
+    }
+
+    _buildPromptPauseRow() {
+        const row = new Adw.SwitchRow({ title: 'Pause video' });
+        this._settings.bind(Keys.PROMPT_PAUSE, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildPromptGrayscaleRow() {
+        const row = new Adw.SwitchRow({ title: 'Grayscale video' });
+        this._settings.bind(Keys.PROMPT_GRAYSCALE, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildPromptChangeBlurRow() {
+        const row = new Adw.ExpanderRow({
+            title: 'Change blur',
+            show_enable_switch: true,
+        });
+        this._settings.bind(Keys.PROMPT_CHANGE_BLUR, row, 'enable-expansion', Gio.SettingsBindFlags.DEFAULT);
+
+        row.add_row(this._buildPromptBlurRadiusRow());
+        row.add_row(this._buildPromptBlurBrightnessRow());
+        return row;
+    }
+
+    _buildPromptBlurRadiusRow() {
+        const row = new Adw.SpinRow({
+            title: 'Blur radius',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 100,
+                step_increment: 1,
+                value: this._settings.get_int(Keys.PROMPT_BLUR_RADIUS),
+            }),
+        });
+
+        row.add_suffix(new Gtk.Label({
+            label: 'px',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+
+        this._settings.bind(Keys.PROMPT_BLUR_RADIUS, row, 'value', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildPromptBlurBrightnessRow() {
+        const row = new Adw.SpinRow({
+            title: 'Blur brightness',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 100,
+                step_increment: 1,
+                value: this._settings.get_double(Keys.PROMPT_BLUR_BRIGHTNESS) * 100,
+            }),
+        });
+
+        row.add_suffix(new Gtk.Label({
+            label: '%',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+
+        row.connect('notify::value', r => {
+            this._settings.set_double(Keys.PROMPT_BLUR_BRIGHTNESS, r.get_value() / 100);
+        });
+
+        return row;
+    }
+
+    _buildPromptAnimDurationRow() {
+        const row = new Adw.SpinRow({
+            title: 'Animation duration',
+            subtitle: 'For the grayscale and blur changes',
+            adjustment: new Gtk.Adjustment({
+                lower: 0,
+                upper: 600000,
+                step_increment: 100,
+                value: this._settings.get_int(Keys.PROMPT_BLUR_ANIM_DURATION),
+            }),
+        });
+
+        row.add_suffix(new Gtk.Label({
+            label: 'ms',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+
+        this._settings.bind(Keys.PROMPT_BLUR_ANIM_DURATION, row, 'value', Gio.SettingsBindFlags.DEFAULT);
         return row;
     }
 });

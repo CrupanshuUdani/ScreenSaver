@@ -1,521 +1,342 @@
-import * as Main from 'resource:///org/gnome/shell/ui/main.js';
-import * as LoginManager from 'resource:///org/gnome/shell/misc/loginManager.js';
+import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
+import { Keys, ActionOnBlank } from './enums.js';
 
-import {Extension, InjectionManager} from 'resource:///org/gnome/shell/extensions/extension.js';
-
-import St from 'gi://St';
-import GLib from 'gi://GLib';
-import Gio from 'gi://Gio';
-import Shell from 'gi://Shell';
-import Clutter from 'gi://Clutter';
-import GObject from 'gi://GObject';
-
-import { Direction, Keys, ActionOnBlank } from './enums.js';
-import { MpvPlayerProcess } from './core/mpv_player_process.js';
-import { GstPlayerProcess } from './core/gst_player_process.js';
-
-import { applyScaling } from './utils/actors.js';
-import { isOnBattery } from './utils/battery.js';
-import { SHELL_VERSION } from './utils/shell_version.js';
-import { logInfo, logWarn, logError } from './utils/logging.js';
-import { sleep, destroySleeps } from './utils/base.js';
-import { getPowerSaveMode } from './utils/dbus.js';
-import { isGtk4PaintableSinkAvailable, isMpvAvailable } from './utils/check_dependencies.js';
+import { resolveMediaPaths } from './utils/media_files.js';
+import { logWarn, logError } from './utils/logging.js';
+import { destroySleeps } from './utils/base.js';
+import { isMpvAvailable } from './utils/check_dependencies.js';
 import { sendErrorNotification } from './utils/notifications.js';
 
-import { ActorAnimator } from './helpers/actor_animator.js';
+import { DialogInjector } from './core/dialog_injector.js';
+import { VideoRenderer } from './core/video_renderer.js';
+import { MpvPlayerProcess } from './core/mpv_player_process.js';
+import { Playlist } from './core/playlist.js';
 
-const MAX_DIALOG_INJECT_ATTEMPTS = 100;
-const DIALOG_INJECT_INTERVAL = 100;
+import { MprisServer } from './helpers/mpris_server.js';
+import { SleepWatcher } from './helpers/sleep_watcher.js';
+import { BatteryWatcher } from './helpers/battery_watcher.js';
+import { ScreenBlankWatcher } from './helpers/screen_blank_watcher.js';
+
 const WINDOW_TIMEOUT = 10000;
 
 export default class LockscreenExtension extends Extension {
     enable() {
-        this._resetLockState();
+        this._promptShown = false;
+        this._ready = false; // Whether the actors are setup and ready
+        this._sleeping = false; 
+        // Last applied result of _isActive(), see _updateActive()
+        this._active = false;
+        // Paused through media controls, nothing else resumes playback until played again
+        this._userPaused = false;
+        // Last pause state reported by mpv
+        this._playerPaused = true;
         this._settings = this.getSettings();
 
-        //NOTE: Global error handler w/ cleanup
-        this._setupLock().catch(err => {
-            logError(err);
+        this._setup().catch((e) => {
+            logError(`Unable to setup extension: ${e}`);
             this.disable();
         });
     }
 
-    _resetLockState() {
-        this._fadeAnim = null;
-        this._grayscaleAnim = null;
-        this._blurRadiusAnim = null;
-        this._blurBrightnessAnim = null;
+    async _setup() {
+        if (!this._checkMpv())
+            return;
 
-        this._backgroundCreated = false;
+        const videoPaths = this._getVideoPaths();
+        if (!videoPaths)
+            return;
 
-        this._wrapperActors = [];
-        this._windowActor = null;
-        this._window = null;
-        
-        this._promptShown = false;
-        this._injectionManager = null;
-        this._player = null;
-        this._tapAction = null;
+        this._readPlaybackSettings();
+        this._setupWatchers();
+        await this._setupInjector();
 
-        this._injectRetryId = 0;
-        this._injectAttempts = 0;
-        this._dbusSubId = 0;
+        this._setupPlayer(this._createPlaylist(videoPaths));
+        if (this._settings.get_boolean(Keys.MPRIS_ENABLED))
+            this._setupMpris();
+
+        await this._player.run();
+        const window = await this._player.waitForWindow(WINDOW_TIMEOUT);
+        await this._setupRenderer(window);
     }
 
-    async _setupLock() {
+    _checkMpv() {
+        if (isMpvAvailable())
+            return true;
+
+        sendErrorNotification(
+            'Live Lock Screen needs MPV to play media. ' +
+            'Install it with your package manager ' +
+            '(see the README for details).'
+        );
+        logError('MPV not found in PATH');
+        return false;
+    }
+
+    _getVideoPaths() {
         const videoPath = this._settings.get_string(Keys.VIDEO_PATH);
         if (!videoPath) {
             logWarn('Video not set, falling back');
-            return;
-        }
-        
-        const disableOnBatter = this._settings.get_boolean(Keys.DISABLE_ON_BATTERY);
-        if (disableOnBatter && await isOnBattery()) {
-            logWarn('Skipping on battery');
-            return;
+            return null;
         }
 
-        const volume = this._settings.get_int(Keys.AUDIO_VOLUME) / 100;
-        const loop = this._settings.get_boolean(Keys.LOOPED);
-        const useVideorate = this._settings.get_boolean(Keys.USE_VIDEORATE);
-        const framerate = this._settings.get_int(Keys.FRAMERATE);
-        const colorAccurate = this._settings.get_boolean(Keys.DEBUG_USE_COLOR_ACCURATE);
-
-        const forceGst = this._settings.get_boolean(Keys.DEBUG_FORCE_GST);
-
-        let cls = null;
-        if (!forceGst && isMpvAvailable()) {
-            logInfo('Using MPV as playback backend');
-            cls = MpvPlayerProcess;
-        }
-        else if (isGtk4PaintableSinkAvailable()) {
-            logInfo('Using GStreamer as playback backend');
-            cls = GstPlayerProcess;
-        }
-        
-        if (!cls)
-        {
+        // The saved path can point to a single file or to a folder of videos
+        const videoPaths = resolveMediaPaths(videoPath);
+        if (videoPaths.length === 0) {
             sendErrorNotification(
-                `No suitable backends available for playback! ` +
-                `Install MPV (recommended) or GStreamer. ` +
-                `More info in README.md.`
-            )
-            logError('No suitable backends available for playback');
-            return;
+                `No supported videos or GIFs found at "${videoPath}". ` +
+                `Falling back to the default lock screen.`
+            );
+            logError(`Nothing to play at "${videoPath}"`);
+            return null;
         }
 
-        this._player = new cls({
-            playerPath: this.path + '/external/run.js',
-            videoPath,
-            scalingMode: this._scalingMode,
-            loop,
-            volume,
-            useVideorate,
-            framerate,
-            colorAccurate: colorAccurate
-        });
-
-        await this._player.run();
-        await this._onPlayerInit();
+        return videoPaths;
     }
 
     /**
-     * TODO: This function is way too overloaded. Split into smaller
+     * Settings used by the watchers and callbacks during the whole lock,
+     * so they have to be read before anything else is set up
      */
-    async _onPlayerInit() {
+    _readPlaybackSettings() {
         this._actionOnBlank = this._settings.get_int(Keys.ACTION_ON_BLANK);
-        this._fadeInDuration = this._settings.get_int(Keys.FADE_IN_DURATION);
-        this._scalingMode = this._settings.get_int(Keys.SCALING_MODE);
-        this._blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
-        this._blurBrightness = this._settings.get_double(Keys.BLUR_BRIGHTNESS);
-        this._forceFullscreen = this._settings.get_boolean(Keys.DEBUG_FORCE_FULLSCREEN);
+        this._disableOnBattery = this._settings.get_boolean(Keys.PAUSE_ON_BATTERY);
+        this._promptPause = this._settings.get_boolean(Keys.PROMPT_PAUSE);
+    }
 
-        this._promptSettings = {
-            [Keys.PROMPT_PAUSE]:              this._settings.get_boolean(Keys.PROMPT_PAUSE),
-            [Keys.PROMPT_GRAYSCALE]:          this._settings.get_boolean(Keys.PROMPT_GRAYSCALE),
-            [Keys.PROMPT_CHANGE_BLUR]:        this._settings.get_boolean(Keys.PROMPT_CHANGE_BLUR),
-            [Keys.PROMPT_BLUR_RADIUS]:        this._settings.get_int(Keys.PROMPT_BLUR_RADIUS),
-            [Keys.PROMPT_BLUR_ANIM_DURATION]: this._settings.get_int(Keys.PROMPT_BLUR_ANIM_DURATION),
-            [Keys.PROMPT_BLUR_BRIGHTNESS]:    this._settings.get_double(Keys.PROMPT_BLUR_BRIGHTNESS),
-        };
+    async _setupInjector() {
+        this._injector = new DialogInjector({
+            onCreateBackgrounds: this._onCreateBackgrounds.bind(this),
+            onPromptShow: this._onPromptShown.bind(this),
+            onClockShow: this._onClockShown.bind(this),
+        });
+        await this._injector.inject();
+    }
 
-        const themeContext = St.ThemeContext.get_for_stage(global.stage);
-        this._blurRadius  *= themeContext.scale_factor;
-        this._blurEffect = {
-            name: 'lockscreen-extension-blur',
-            radius: this._blurRadius,
-            brightness: this._blurBrightness,
-        };
+    _createPlaylist(videoPaths) {
+        const playlist = new Playlist({
+            videos: videoPaths,
+            order: this._settings.get_int(Keys.PLAYLIST_ORDER),
+            start: this._settings.get_int(Keys.PLAYLIST_START),
+            //NOTE: Last played is the name of the file, because keeping 
+            // index is unreliable
+            lastPlayed: this._settings.get_string(Keys.PLAYLIST_LAST_PLAYED),
+        });
+        this._saveLastPlayed(playlist.current());
+        return playlist;
+    }
 
-        this._initAnimators();
+    _setupPlayer(playlist) {
+        this._player = new MpvPlayerProcess({
+            playlist,
+            actionOnEnd: this._settings.get_int(Keys.ACTION_ON_END),
+            volume: this._settings.get_int(Keys.AUDIO_VOLUME) / 100,
+            useVideorate: this._settings.get_boolean(Keys.USE_VIDEORATE),
+            framerate: this._settings.get_int(Keys.FRAMERATE),
+            configPath: this.dir.get_child('external').get_child('mpv.conf').get_path(),
+            profile: this._settings.get_int(Keys.MPV_PROFILE),
+            customArgs: this._settings.get_strv(Keys.MPV_CUSTOM_ARGS),
+            onSizeChange: (w, h) => {
+                if (!this._renderer) return;
 
-        this._injectionManager = new InjectionManager();
+                this._renderer.setSize(w, h);
+                // If clones werent created till this point, create them now
+                if (!this._renderer.clonesCreated())
+                    this._injector.recreateBackgrounds();
+            },
+            onPauseChange: (paused) => {
+                this._mpris?.setPlaying(!paused);
+            },
+            onFileChange: (path) => {
+                this._mpris?.setTrack(path);
+                this._saveLastPlayed(path);
+            },
+            onNext: () => this._switchVideo(() => this._player?.next()),
+            // The new video is ready, end the blackout started by _switchVideo()
+            onPlaybackRestart: () => this._renderer?.blackin(),
+        });
+    }
 
-        const win = await this._player.waitForWindow(WINDOW_TIMEOUT); 
-        this._window = win
-        this._windowActor = win.get_compositor_private();
-
-        this._window.connectObject('unmanaged', () => {
-            this._resetWindowActor();
-            this._window = null;
-        }, this);
-        this._windowActor?.connectObject('destroy', () => {
-            this._windowActor = null;
-        }, this);
-        
-        //NOTE: On gnome 48 and lower this functions accepts 1 argument
-        if (SHELL_VERSION > 48)
-            this._window.unmaximize()                
+    /**
+     * Fades to black and loads new video with load() callback
+     * @param {() => void} load - Loads the other video, e.g. player.next()
+     */
+    _switchVideo(load) {
+        if (this._renderer)
+            this._renderer.blackout(load);
         else
-            this._window.unmaximize(true)
-
-        const parent = this._windowActor.get_parent();
-        if (parent) parent.remove_child(this._windowActor);
-
-        global.stage.add_child(this._windowActor);
-        global.stage.set_child_below_sibling(this._windowActor, null);
-        this._windowActor.opacity = 0;
-
-        await this._injectIntoDialog();
+            load();
     }
 
-    _initAnimators() {
-        const dstRadius = this._promptSettings[Keys.PROMPT_BLUR_RADIUS];
-        const dstBrightness = dstRadius ? this._promptSettings[Keys.PROMPT_BLUR_BRIGHTNESS] : 1;
+    async _setupRenderer(window) {
+        this._renderer = new VideoRenderer({
+            window,
+            w: this._player.w,
+            h: this._player.h,
+            scalingMode: this._settings.get_int(Keys.SCALING_MODE),
+            fadeInDuration: this._settings.get_int(Keys.FADE_IN_DURATION),
+            blurRadius: this._settings.get_int(Keys.BLUR_RADIUS),
+            blurBrightness: this._settings.get_double(Keys.BLUR_BRIGHTNESS),
+            promptGrayscale: this._settings.get_boolean(Keys.PROMPT_GRAYSCALE),
+            promptChangeBlur: this._settings.get_boolean(Keys.PROMPT_CHANGE_BLUR),
+            promptAnimDuration: this._settings.get_int(Keys.PROMPT_BLUR_ANIM_DURATION),
+            promptBlurBrightness: this._settings.get_double(Keys.PROMPT_BLUR_BRIGHTNESS),
+            promptBlurRadius: this._settings.get_int(Keys.PROMPT_BLUR_RADIUS),
+            blackoutDuration: this._settings.get_boolean(Keys.PLAYLIST_FADE_ENABLED)
+                ? this._settings.get_int(Keys.PLAYLIST_FADE_DURATION)
+                : 0,
+            onReady: this._onReady.bind(this),
+        });
 
-        const srcRadius = this._blurRadius;
-        const srcBrightness = srcRadius ? this._blurBrightness : 1;
+        // Without a size yet, onSizeChange creates the backgrounds later
+        if (this._player.w)
+            this._injector.recreateBackgrounds();
+    }
 
-        if (this._fadeInDuration > 0)
-            this._fadeAnim = new ActorAnimator({
-                actors: [],
-                property: 'opacity',
-                from: 0,
-                to: 255,
-                duration: this._fadeInDuration
+    _setupMpris() {
+        const play = () => {
+            this._userPaused = false;
+            this.playVideo();
+        };
+        const pause = () => {
+            this._userPaused = true;
+            this._player?.pause();
+        };
+
+        this._mpris = new MprisServer({
+            canGoNext: this._player.hasMultipleVideos,
+            canGoPrevious: this._player.hasMultipleVideos,
+            onPlay: play,
+            onPause: pause,
+            onStop: () => this._player?.stopImmediately(),
+            onPlayPause: () => this._player?.isPaused() ? play() : pause(),
+            onNext: () => this._switchVideo(() => this._player?.next()),
+            onPrevious: () => this._switchVideo(() => this._player?.previous()),
+        });
+        this._mpris.setTrack(this._player.currentFile);
+    }
+
+    _setupWatchers() {
+        if (this._disableOnBattery) {
+            this._batteryWatcher = new BatteryWatcher({
+                onUnplugged: () => this._player?.pause(),
+                onPlugged: () => this.playVideo(),
             });
-        if (this._promptSettings[Keys.PROMPT_GRAYSCALE])
-            this._grayscaleAnim = new ActorAnimator({
-                actors: [],
-                property: '@effects.lockscreen-extension-desaturate.factor',
-                from: 0,
-                to: 1,
-                duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION]
-            });
-        if (this._promptSettings[Keys.PROMPT_CHANGE_BLUR]) {
-            this._blurRadiusAnim = new ActorAnimator({
-                actors: [],
-                property: '@effects.lockscreen-extension-blur.radius',
-                from: parseFloat(srcRadius),
-                to: parseFloat(dstRadius),
-                duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION]
-            });
-            this._blurBrightnessAnim = new ActorAnimator({
-                actors: [],
-                property: '@effects.lockscreen-extension-blur.brightness',
-                from: parseFloat(srcBrightness),
-                to: parseFloat(dstBrightness),
-                duration: this._promptSettings[Keys.PROMPT_BLUR_ANIM_DURATION]
+        }
+
+        //NOTE:
+        // Suspending also turns the screen off, so both watchers report the same
+        // transition. To avoid duplicate calls using same _updateActive function
+        this._sleepWatcher = new SleepWatcher({
+            onSleep: () => {
+                this._sleeping = true;
+                this._updateActive();
+            },
+            onResume: () => {
+                this._sleeping = false;
+                this._updateActive();
+            }
+        });
+
+        if (this._actionOnBlank != ActionOnBlank.IGNORE) {
+            this._blankWatcher = new ScreenBlankWatcher({
+                onScreenOn: () => this._updateActive(),
+                onScreenOff: () => this._updateActive(),
             });
         }
     }
 
-    _resetWindowActor() {
-        //NOTE: 
-        // This function doesnt destroy the window actor
-        // it just resets it to its initial state
-        // and also hides it for convinience
-        if (!this._windowActor) return;
+    playVideo() {
+        if (!this._player) return;
 
-        this._windowActor.disconnectObject(this);
-        this._windowActor.hide();
-
-        const parent = this._windowActor.get_parent();
-        if (parent) parent.remove_child(this._windowActor);
-        global.window_group.add_child(this._windowActor);
-        this._windowActor = null;
-    }
-
-    async _waitForFullLoad() {
-        while (!Main.screenShield._dialog || this._player.w === 0) {
-            if (this._injectAttempts >= MAX_DIALOG_INJECT_ATTEMPTS) {
-                throw new Error(
-                    `_dialog never appeared after ${MAX_DIALOG_INJECT_ATTEMPTS} attempts`
-                );
-            }
-
-            this._injectAttempts++;
-            await sleep(DIALOG_INJECT_INTERVAL);
-        }
-
-        this._injectAttempts = 0;
-
-        return Main.screenShield._dialog;
-    }
-
-    async _injectIntoDialog() {
-        let dialog = await this._waitForFullLoad();
-
-        this._injectionManager.overrideMethod(
-            dialog, '_createBackground',
-            (original) => {
-                const self = this;
-                return function(monitorIndex) {
-                    original.call(this, monitorIndex);                    
-                    self._handleMonitor(monitorIndex);
-                };
-            }
-        );
-        this._injectionManager.overrideMethod(
-            dialog, '_showPrompt',
-            (original) => {
-                const self = this;
-                return function(...args) {
-                    original.call(this, ...args);
-                    self._onPromptShow();
-                };
-            }
-        );
-        this._injectionManager.overrideMethod(
-            dialog, '_showClock',
-            (original) => {
-                const self = this;
-                return function(...args) {
-                    original.call(this, ...args);
-                    self._onPromptHide();
-                };
-            }
+        //NOTE: Checking if something prevents playback
+        const preventPlay = (
+            this._userPaused ||
+            (this._promptPause && this._promptShown) ||
+            (this._disableOnBattery && this._batteryWatcher?.isOnBattery()) ||
+            !this._isActive()
         );
 
-        this._connectFingerprintAuth(dialog);
-        
-        // Removing the existing signal to use our custom one
-        const gtype = dialog._swipeTracker.constructor.$gtype;
-        const swipeSignalId = GObject.signal_lookup('end', gtype);
-        dialog._swipeTracker.disconnect(swipeSignalId);
-
-        dialog._swipeTracker.connectObject('end', (...args) => {
-            dialog._swipeEnd(...args);
-            if (dialog._activePage == dialog._clock)
-                this._onPromptHide();
-            else
-                this._onPromptShow();
-        }, this);
-
-        //NOTE: Replacing TapAction with a fresh one if exists (for gnome 48 and older)
-        if (SHELL_VERSION < 49) {
-            const actions = dialog.get_actions();
-            const tapAction = actions.find(a => {
-                //HACK: Maybe not the most beautiful solution, but works
-                return a.constructor.name.includes('TapAction')
-            });
-            if (tapAction) {
-                dialog.remove_action(tapAction);
-                
-                let newAction = new Clutter.TapAction();
-                newAction.connectObject('tap', dialog._showPrompt.bind(dialog), this);
-                dialog.add_action(newAction);
-            } 
-        }
-
-        dialog._updateBackgrounds();
+        if (!preventPlay)
+            this._player.play();
     }
 
-    _connectFingerprintAuth(dialog) {
-        //NOTE: 
-        // I'll be honest, I have no idea if this works or not
-        // I dont have a fingerprint scanner to test
-        // But it should :) 
-        const authPrompt = dialog._authPrompt;
-        if (!authPrompt) {
-            logWarn('AuthPrompt not available, fingerprint detection skipped');
+    /**
+     * Whether the video should be visible and running as far as
+     * sleep and screen state are concerned.
+     * No blank watcher (ActionOnBlank.IGNORE) means the screen state is ignored
+     */
+    _isActive() {
+        return !this._sleeping && (this._blankWatcher?.isOn ?? true);
+    }
+
+    _updateActive() {
+        if (!this._ready) return;
+
+        const active = this._isActive();
+        // If the state hasnt changed, skip (avoiding duplicate calls)
+        if (active === this._active) return;
+        this._active = active;
+
+        if (active) {
+            //NOTE: Slight delay before running the animation so the screen is visible (ideally)
+            this._renderer?.fadeIn(50);
+            this.playVideo();
             return;
         }
 
-        // When a fingerprint verification message is shown (e.g. "Place your finger")
-        // treat it as a prompt being shown so blur/pause effects apply
-        authPrompt.connectObject(
-            'next', () => {
-                this._onPromptShow();
-            },
-            this
-        );
+        this._renderer?.pauseFade();
+        if (this._actionOnBlank == ActionOnBlank.RESTART) {
+            this._player?.stopImmediately();
+        } else if (this._actionOnBlank == ActionOnBlank.NEXT) {
+            // The next video is loaded paused and starts once the screen is back
+            this._player?.pauseImmediately();
+            this._player?.next();
+        } else if (this._sleeping) {
+            // No time for the audio fade before the system suspends
+            this._player?.pauseImmediately();
+        } else if (this._actionOnBlank == ActionOnBlank.PAUSE) {
+            this._player?.pause();
+        }
     }
 
-    _onPromptShow() {
+    _saveLastPlayed(path) {
+        if (this._settings?.get_string(Keys.PLAYLIST_LAST_PLAYED) !== path)
+            this._settings?.set_string(Keys.PLAYLIST_LAST_PLAYED, path);
+    }
+
+    _onCreateBackgrounds(monitorIndex, group) {
+        this._renderer?.updateBackground(monitorIndex, group);
+    }
+
+    _onReady() {
+        this._ready = true;
+        this._active = this._isActive();
+
+        // If the screen is blank dont start the playback and animation,
+        // _updateActive() starts them once the screen turns on
+        if (!this._active)
+            return;
+
+        this._renderer?.fadeIn();
+        this.playVideo();
+    }
+
+    _onPromptShown() {
         if (this._promptShown) return;
         this._promptShown = true;
 
-        //NOTE: Adding small delay to prevent stuttering of video
-        this._blurRadiusAnim?.play(Direction.FORWARD, 5);
-        this._blurBrightnessAnim?.play(Direction.FORWARD, 5);
-        this._grayscaleAnim?.play(Direction.FORWARD);
-
-        if (this._promptSettings[Keys.PROMPT_PAUSE])
+        this._renderer?.onPromptShown();
+        if (this._promptPause)
             this._player?.pause();
     }
 
-    _onPromptHide() {
+    _onClockShown() {
         if (!this._promptShown) return;
         this._promptShown = false;
 
-        //NOTE: Adding small delay to prevent stuttering of video
-        this._blurRadiusAnim?.play(Direction.BACKWARD, 5);
-        this._blurBrightnessAnim?.play(Direction.BACKWARD, 5);
-        this._grayscaleAnim?.play(Direction.BACKWARD);
-
-        this._resumePlayback();
-    }
-
-    _handleMonitor(monitorIndex) {
-        if (!this._window || this._window.unmanaging || !this._windowActor)
-            return;
-
-        if (this._player?.shouldResize) {
-            this._window.move_resize_frame(
-                true, 0, 0, this._player.w, this._player.h
-            );
-        }
-
-        const isLastMonitor = monitorIndex === Main.layoutManager.monitors.length - 1;
-        const monitor = Main.layoutManager.monitors[monitorIndex];
-
-        const wrapper = new Clutter.Actor();
-
-        if (monitorIndex == 0) {
-            this._wrapperActors = [];
-        }
-
-        Main.screenShield._dialog._backgroundGroup.add_child(wrapper);
-        Main.screenShield._dialog._backgroundGroup.set_child_above_sibling(wrapper, null);
-
-        const cloneActor = new Clutter.Clone({
-            source: this._windowActor
-        });
-
-        this._blurEffect.radius = this._blurRadiusAnim?.get_value() || this._blurRadius;
-        this._blurEffect.brightness = this._blurBrightnessAnim?.get_value() || this._blurBrightness;
-        wrapper.add_effect(new Shell.BlurEffect(this._blurEffect));
-
-        // Adding color desaturation effect if needed
-        if (this._promptSettings[Keys.PROMPT_GRAYSCALE]) {
-            wrapper.add_effect_with_name(
-                'lockscreen-extension-desaturate',
-                new Clutter.DesaturateEffect({ factor: this._grayscaleAnim?.get_value() || 0.0 })
-            );
-        }
-
-        if (!this._backgroundCreated && this._fadeInDuration > 0)
-            wrapper.opacity = 0;
-
-        wrapper.add_child(cloneActor);
-        wrapper.set_child_above_sibling(cloneActor, null);
-        this._wrapperActors.push(wrapper);
-
-        wrapper.set_position(monitor.x, monitor.y);
-        wrapper.set_size(monitor.width, monitor.height);
-        wrapper.set_clip_to_allocation(true);
-        
-        applyScaling(
-            cloneActor, 
-            this._scalingMode,
-            this._player.w, this._player.h,
-            monitor.width, monitor.height
-        );
-
-        if (isLastMonitor) {
-            this._fadeAnim?.rebind(this._wrapperActors);
-            this._grayscaleAnim?.rebind(this._wrapperActors);
-            this._blurRadiusAnim?.rebind(this._wrapperActors);
-            this._blurBrightnessAnim?.rebind(this._wrapperActors);
-        }
-
-        if (!this._backgroundCreated && isLastMonitor) {
-            this._initLoginManager();
-
-            if (this._actionOnBlank != ActionOnBlank.IGNORE) {
-                this._initScreenBlankWatcher();
-                // If the screen is blank dont start the playback and animation
-                getPowerSaveMode().then((state) => {
-                    if (state == 0) this._onScreenOn();
-                })
-            // Start video and animation immediately 
-            } else {
-                this._onScreenOn();
-            }
-
-            this._backgroundCreated = true;
-        }
-    }
-
-    _resumePlayback() {
-        const shouldPlay = !this._promptShown || !this._promptSettings?.[Keys.PROMPT_PAUSE];
-        if (shouldPlay) {
-            this._player.play();
-            // Additional kick in case GPU/DRM compositor pipeline took a moment to resume
-            // NOTE: Seems like an overkill. Commented out for now
-            //GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
-            //    if (this._player && (!this._promptShown || !this._promptSettings?.[Keys.PROMPT_PAUSE]))
-            //        this._player.play();
-            //    return GLib.SOURCE_REMOVE;
-            //});
-        }
-    }
-
-    _onScreenOn() {
-        this._fadeAnim?.play();
-        this._resumePlayback();
-    }
-
-    _initLoginManager() {
-        this._loginManager = LoginManager.getLoginManager();
-        this._loginManager.connectObject('prepare-for-sleep', (_manager, aboutToSleep) => {
-            if (!this._player) return;
-
-            if (aboutToSleep) {
-                if (this._actionOnBlank == ActionOnBlank.RESTART)
-                    this._player.stopImmediately();
-                else
-                    this._player.pauseImmediately();
-            } else {
-                this._onScreenOn();
-            }
-        }, this);
-    }
-
-    _initScreenBlankWatcher() {
-        // Track display power saving state (DPMS on/off) via Mutter DBus interface.
-        // PowerSaveMode: 0 = on, 1 = standby, 2 = suspend, 3 = off.
-        this._dbusSubId = Gio.DBus.session.signal_subscribe(
-            'org.gnome.Mutter.DisplayConfig',
-            'org.freedesktop.DBus.Properties',
-            'PropertiesChanged',
-            '/org/gnome/Mutter/DisplayConfig',
-            null,
-            Gio.DBusSignalFlags.NONE,
-            (_conn, _sender, _path, _iface, _signal, parameters) => {
-                if (!this._player) return;
-                const [_, changed] = parameters.deep_unpack();
-                if (!('PowerSaveMode' in changed)) return;
-
-                let rawMode = changed['PowerSaveMode'].deep_unpack();
-                const mode = Number(rawMode);
-                logInfo(`PowerSaveMode changed to ${mode}`);
-                
-                if (mode === 0) {
-                    this._onScreenOn();
-                }
-                else {
-                    if (this._actionOnBlank == ActionOnBlank.RESTART)
-                        this._player.stopImmediately();
-                    else if (this._actionOnBlank == ActionOnBlank.PAUSE)
-                        this._player.pause();
-
-                    this._fadeAnim?.pause();
-                }
-            }
-        );
+        this._renderer?.onClockShown();
+        if (this._promptPause)
+            this.playVideo();
     }
 
     /**
@@ -524,53 +345,15 @@ export default class LockscreenExtension extends Extension {
     */
     disable() {
         destroySleeps();
-
-        this._fadeAnim?.destroy();
-        this._blurBrightnessAnim?.destroy();
-        this._blurRadiusAnim?.destroy();
-        this._grayscaleAnim?.destroy();
-
-        if (this._injectRetryId) {
-            GLib.source_remove(this._injectRetryId);
-            this._injectRetryId = 0;
-        }
-        this._injectAttempts = 0;
-
-        // Checking if the dialog even exists
-        if (Main.screenShield._dialog) {
-            Main.screenShield._dialog._swipeTracker?.disconnectObject(this);
-            Main.screenShield._dialog._authPrompt?.disconnectObject(this);
-        }
         
-        this._tapAction?.disconnectObject(this);
-            
-        this._resetWindowActor();
+        this._mpris?.destroy();
+        this._batteryWatcher?.destroy();
+        this._sleepWatcher?.destroy();
+        this._blankWatcher?.destroy();
 
-        if (this._window) {
-            this._window.disconnectObject(this);
-            this._window = null;
-        }
-
+        this._renderer?.destroy();
         this._player?.destroy();
-        this._player = null;
-
-        this._injectionManager?.clear();
-        this._injectionManager = null;
-
-        this._loginManager?.disconnectObject(this);
-
-        if (this._dbusSubId) {
-            Gio.DBus.session.signal_unsubscribe(this._dbusSubId);
-            this._dbusSubId = 0;
-        }
-
-        Object.values(this._wrapperActors).forEach(actor => {
-            actor.disconnectObject(this);
-            actor.remove_effect_by_name('lockscreen-extension-blur');
-            actor.remove_effect_by_name('lockscreen-extension-desaturate');
-            actor.destroy();
-        });
-        this._wrapperActors = [];
+        this._injector?.destroy();
         this._settings = null;
     }
 }

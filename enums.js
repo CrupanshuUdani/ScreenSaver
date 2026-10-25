@@ -1,12 +1,20 @@
 export const Keys = {
-    DISABLE_ON_BATTERY: "general-disable-on-battery",
+    // Keeping the old "general-disable-on-battery" name for backward compatibility
+    PAUSE_ON_BATTERY: "general-disable-on-battery",
     ACTION_ON_BLANK: "general-action-on-blank",
+    ACTION_ON_END: "general-action-on-end",
+    MPRIS_ENABLED: "general-mpris-enabled",
+
+    PLAYLIST_ORDER: "playlist-order",
+    PLAYLIST_START: "playlist-start",
+    PLAYLIST_FADE_ENABLED: "playlist-fade-enabled",
+    PLAYLIST_FADE_DURATION: "playlist-fade-duration",
+    PLAYLIST_LAST_PLAYED: "playlist-last-played",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",
     USE_VIDEORATE: "background-video-use-videorate",
     FRAMERATE: "background-video-framerate",
-    LOOPED: "background-video-looped",
     FADE_IN_DURATION: "background-fade-in-duration",
 
     BLUR_RADIUS: "background-video-blur-radius",
@@ -21,10 +29,8 @@ export const Keys = {
     PROMPT_BLUR_BRIGHTNESS: "prompt-blur-brightness",
     PROMPT_BLUR_ANIM_DURATION: "prompt-blur-anim-duration",
 
-    DEBUG_FORCE_GST: "debug-force-gst",
-    DEBUG_USE_COLOR_ACCURATE: "debug-use-color-accurate",
-    DEBUG_FORCE_FULLSCREEN: "debug-force-fullscreen",
-    DEBUG_FORCE_GIF_SUPPORT: "debug-force-gif-support",
+    MPV_PROFILE: "mpv-profile",
+    MPV_CUSTOM_ARGS: "mpv-custom-args",
 };
 
 export const ScalingMode = {
@@ -37,6 +43,34 @@ export const ActionOnBlank = {
     IGNORE: 0,
     PAUSE: 1,
     RESTART: 2,
+    NEXT: 3,
+}
+
+export const ActionOnEnd = {
+    LOOP: 0,
+    PAUSE: 1,
+    NEXT: 2
+}
+
+export const PlaylistOrder = {
+    SEQUENTIAL: 0,
+    SHUFFLE: 1,
+    RANDOM: 2,
+}
+
+export const PlaylistStart = {
+    FIRST: 0,
+    RANDOM: 1,
+    LAST_PLAYED: 2,
+}
+
+/**
+ * Profiles defined in external/mpv.conf
+ */
+export const MpvProfile = {
+    QUALITY: 0,
+    BALANCED: 1,
+    EFFICIENT: 2,
 }
 
 /**
