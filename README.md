@@ -4,7 +4,8 @@
 
 # Live Lock Screen
 
-**Set any video or GIF as your GNOME lock screen background.**
+**Bring your lock screen to life.**<br>
+Play videos and GIFs on the GNOME lock screen.
 
 <p>
   <img alt="GNOME Shell 46+" src="https://img.shields.io/badge/GNOME_Shell-46%2B-4A86CF?style=for-the-badge&logo=gnome&logoColor=white&labelColor=2B2B2B">
@@ -15,18 +16,15 @@
 
 <p>
   <a href="https://github.com/sponsors/nick-redwill"><img alt="Sponsor" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a>
-  <a href="https://www.buymeacoffee.com/nick_redwill"><img alt="Buy me a tea" src="https://img.shields.io/badge/Buy_me_a_tea-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
 </p>
-
-<a href="https://extensions.gnome.org/extension/9419/live-lock-screen/">
-  <img src="https://github.com/user-attachments/assets/d15de748-11b8-4a85-ad34-ec7786547b3c" width="220" alt="Get it on GNOME Extensions">
-</a>
 
 <p>
   <a href="#features">Features</a> •
   <a href="#installation">Installation</a> •
   <a href="#requirements">Requirements</a> •
-  <a href="#known-issues">Known Issues</a> •
+  <a href="#tips">Tips</a> •
+  <a href="#known-issues">Known Issues</a> • 
+  <a href="#troubleshooting">Troubleshooting</a> •
   <a href="#support">Support</a>
 </p>
 
@@ -54,17 +52,19 @@ If you're looking for more advanced lock screen or desktop customization, you ma
 
 | | Feature | |
 |:-:|---|---|
-| 🎬 | **Video & GIF playback** | Use any video or GIF file as the lock screen background |
-| 🔁 | **Looping** | Seamless loop support |
+| 🎬 | **Video & GIF playback** | Use any video or GIF as the lock screen background, played by MPV |
+| 📁 | **Playlists** | Pick a folder instead of a single file. Play the videos in order, shuffled, or randomly, and start with the first, a random, or the last played video |
+| 🌑 | **Smooth transitions** | Fades through black when switching videos, so you never see the next one loading. Disable this if you prefer abrupt switching. |
 | 🎨 | **Scaling modes** | Cover, fit, or stretch |
-| 🔲 | **Transparency** | Transparent video support (RGBA) |
-| ⏸️ | **Smart pause** | Automatically pauses on suspend and resumes on wake |
-| 🌌 | **Fade-in** | Configurable fade-in animation |
+| 🔲 | **Transparency** | Transparent GIFs and videos are shown over the default background |
 | 🖥️ | **Multi-monitor** | Works across all your displays |
-| 🌫️ | **Blur effect** | Adjustable blur radius and brightness |
-| 🎞️ | **Frame rate control** | Configurable from 1 to 120 FPS |
-| 🔊 | **Audio** | Optional audio output with volume control and fade-in/out |
-| 🔑 | **Password prompt reactions** | Blur/brightness change, video pause, or grayscale when the prompt appears |
+| 🌌 | **Fade-in & blur** | Configurable fade-in animation, blur radius, and brightness |
+| 🔑 | **Password prompt reactions** | Pause, grayscale, or change the blur when the password prompt appears |
+| ⏸️ | **Smart pause** | Reacts to the video ending, the screen turning off, suspend, and running on battery |
+| ⏯️ | **Media controls** | Play, pause, and skip videos with media keys or any MPRIS client |
+| 🔊 | **Audio** | Optional audio with volume control and smooth fade in/out |
+| ⚡ | **Playback profiles** | Quality, Balanced, or Efficient, depending on your hardware |
+| 🛠️ | **Custom MPV arguments** | Pass your own MPV options for full control |
 
 ## Installation
 
@@ -96,22 +96,12 @@ cp -r LiveLockScreen ~/.local/share/gnome-shell/extensions/live-lockscreen@nick-
 ```bash
 gnome-extensions enable live-lockscreen@nick-redwill
 ```
-
-**4. Open the extension preferences and pick your video file** 🎉
+**4. Open the extension preferences and pick a file or a folder** 🎉
 
 ## Requirements
 
 - **GNOME Shell 46+**
-- A playback backend: **MPV** (recommended) or **GStreamer** (fallback)
-
-> [!IMPORTANT]
-> Up until version **4.0.0**, the extension relied solely on GStreamer for video playback. Starting from that version, **MPV is the main and recommended backend**.
->
-> GStreamer remains available as a fallback for now (you can force it in the **Debug** section of the preferences), but the end goal is to remove it entirely. See [issue #25](https://github.com/nick-redwill/LiveLockScreen/issues/25) for the reasoning behind this decision.
->
-> If you run into problems with MPV playback, please [open an issue](https://github.com/nick-redwill/LiveLockScreen/issues).
-
-### MPV (recommended)
+- **MPV**
 
 | Distro | Command |
 |---|---|
@@ -119,64 +109,64 @@ gnome-extensions enable live-lockscreen@nick-redwill
 | Ubuntu / Debian | `sudo apt install mpv` |
 | Arch | `sudo pacman -S mpv` |
 
-<details>
-<summary><b>GStreamer (fallback) — click to expand</b></summary>
-
-<br>
-
-You'll need **both** the GStreamer plugins and the GTK4 video sink (`gtk4paintablesink`).
-
-**GStreamer good/bad/ugly plugins**
-
-```bash
-# Fedora
-sudo dnf install gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly gstreamer1-plugins-bad-free-extras
-
-# Ubuntu / Debian
-sudo apt install gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly
-
-# Arch
-sudo pacman -S gst-plugins-good gst-plugins-bad gst-plugins-ugly
-```
-
-**GStreamer GTK4 video sink**
-
-```bash
-# Fedora
-sudo dnf install gstreamer1-plugin-gtk4
-
-# Ubuntu 24.10+ / Debian (newer)
-sudo apt install gstreamer1.0-gtk4
-
-# Arch
-sudo pacman -S gst-plugin-gtk4
-```
-
 > [!NOTE]
-> On **Ubuntu 24.04**, `gstreamer1.0-gtk4` isn't available as a package. Either build it from source or download it from Launchpad.
+> The GStreamer backend from older versions has been removed, MPV is now the only player.
 
-</details>
+> [!IMPORTANT]
+> **Some formats need extra codecs.** Some distributions ship MPV without patented codecs such as **H.264** and **H.265/HEVC**, which most MP4 and MKV videos use. Without them, those videos stay black or do not play at all.
+> 
+> Look for your distribution's guide on enabling multimedia codecs.
 
-## Known Issues
+## Tips
 
-- Possible clicking/crackling sounds when pausing/playing video with audio
+**Keep the screen from turning off**<br>
+GNOME turns the screen off on the lock screen. To prevent that use the [Unblank lock screen](https://extensions.gnome.org/extension/1414/unblank/) extension. You can also choose what happens to the video when the screen turns off (ignore, pause, restart, or switch to the next video) under **Events → Action on blank**.
 
-Found something else? [Report it here](https://github.com/nick-redwill/LiveLockScreen/issues).
+**Playback profiles**<br>
+Found under **Performance**:
+
+| Profile | |
+|---|---|
+| **Quality** | Best image quality, higher GPU usage |
+| **Balanced** | Same as Quality with cheaper scaling, a good choice for most laptops |
+| **Efficient** | Lowest GPU usage. **Experimental**, may not work on every system and does not support transparency |
+
+If the video does not show up or looks wrong with Efficient, switch to Balanced.
+
+**Media controls**<br>
+Enable **Media controls** in the preferences to control the video with media keys or any MPRIS client (e.g. GSConnect).
+
+## Troubleshooting
+
+If the default lock screen shows up instead of your video, check the logs while locking the screen:
+
+```bash
+journalctl -f -o cat /usr/bin/gnome-shell | grep LiveLockScreen
+```
+
+Common causes:
+- **MPV is not installed** or not in your `PATH`
+- **The selected folder has no supported files**. The preferences show the number of playable files and mark the source red if there are none
+- **Missing codecs**, the video stays black or only some files play. Check if the file plays with `mpv /path/to/video`, and see the codecs note under [Requirements](#requirements)
+- **The Efficient profile does not work on your system**, try Balanced instead
+- **Broken custom MPV arguments**, try clearing them
+
+When [reporting a bug](https://github.com/nick-redwill/LiveLockScreen/issues), please include your GNOME Shell version, MPV version (`mpv --version`), and the log output.
 
 ## Support
 
-If you enjoy this extension, consider buying me a tea. I'm not really a coffee person :D
+If you enjoy this extension, consider supporting its development on GitHub Sponsors.
 
 <p align="center">
   <a href="https://github.com/sponsors/nick-redwill">
     <img src="https://img.shields.io/badge/Sponsor_on_GitHub-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white" height="50" alt="Sponsor on GitHub">
   </a>
-  <br>
-  <a href="https://www.buymeacoffee.com/nick_redwill">
-    <img src="https://img.buymeacoffee.com/button-api/?text=Buy%20Me%20a%20Tea&emoji=%F0%9F%8D%B5&slug=nick_redwill&button_colour=FFDD00&font_colour=000000&font_family=Lato&outline_colour=000000&coffee_colour=ffffff" height="50" alt="Buy me a tea">
-  </a>
 </p>
+
+## Development
+
+This project is developed with the assistance of AI tools. All changes are planned or approved by the author, and all AI-generated code is reviewed and tested before it is merged.
 
 ## License
 
-Released under the [AGPL-3.0](LICENSE) license.
+Released under the [AGPL-3.0](LICENSE.txt) license.
