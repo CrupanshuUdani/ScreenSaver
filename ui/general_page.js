@@ -35,7 +35,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         this.add(imageGroup);
         this.add(playlistGroup);
         this.add(eventsGroup);
-        this.add(this._buildPerformanceGroup());
+        const performanceGroup = this._buildPerformanceGroup();
+        this.add(performanceGroup);
         this.add(this._buildAdvancedGroup());
 
         // Video-only groups are hidden while images are selected, and vice versa
@@ -43,7 +44,8 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             const images = this._settings.get_int(Keys.MEDIA_TYPE) === MediaType.IMAGES;
             videoGroup.set_visible(!images);
             playlistGroup.set_visible(!images);
-            this._actionOnEndRow.set_visible(!images);
+            eventsGroup.set_visible(!images);
+            performanceGroup.set_visible(!images);
             imageGroup.set_visible(images);
         };
         toggleGroups();
@@ -395,7 +397,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             model: Gtk.StringList.new(['Loop', 'Pause', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_END, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
-        this._actionOnEndRow = row;
         return row;
     }
 
