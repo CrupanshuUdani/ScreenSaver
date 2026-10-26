@@ -32,9 +32,6 @@ Play videos and GIFs on the GNOME lock screen.
 
 ---
 
-> [!WARNING]
-> **NVIDIA users:** on recent NVIDIA drivers, prolonged lock sessions may trigger a kernel-side memory leak that can lead to system-wide OOM events or crashes. This appears to be a driver issue rather than a bug in the extension.
-
 > [!TIP]
 > Having trouble with the current version? You can try an older version of the extension though sticking with the latest version is highly recommended for better performance.
 
