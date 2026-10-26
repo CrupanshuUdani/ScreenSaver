@@ -38,7 +38,7 @@ export class MpvPlayerProcess {
     constructor({
         playlist, actionOnEnd = ActionOnEnd.LOOP, 
         volume,
-        useVideorate = false, framerate, 
+        useVideorate = false, framerate, imageDuration = 0,
         onSizeChange, onPauseChange, onFileChange, onNext, onPlaybackRestart,
         configPath,
         profile = MpvProfile.QUALITY, customArgs = [],
@@ -60,6 +60,8 @@ export class MpvPlayerProcess {
         this._volume = volume;
         this._useVideorate = useVideorate;
         this._framerate = framerate;
+        // Seconds each image stays on screen, 0 when playing videos
+        this._imageDuration = imageDuration;
 
         this._onSizeChange = onSizeChange;
         this._onPauseChange = onPauseChange;
@@ -126,7 +128,10 @@ export class MpvPlayerProcess {
         if (this._actionOnEnd === ActionOnEnd.LOOP)
             args.push('--loop');
 
-        if (this._useVideorate)
+        if (this._imageDuration > 0)
+            args.push(`--image-display-duration=${this._imageDuration}`);
+
+        if (this._useVideorate && !this._imageDuration)
             args.push(`--vf=fps=${this._framerate}`);
 
         // "--" so a file name starting with "-" is not parsed as an option

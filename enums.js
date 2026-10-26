@@ -1,6 +1,8 @@
 export const Keys = {
     // Keeping the old "general-disable-on-battery" name for backward compatibility
     PAUSE_ON_BATTERY: "general-disable-on-battery",
+    ENABLE_UNBLANK: "enable-unblank",
+    UNBLANK_ON_AC_ONLY: "unblank-on-ac-only",
     ACTION_ON_BLANK: "general-action-on-blank",
     ACTION_ON_END: "general-action-on-end",
     MPRIS_ENABLED: "general-mpris-enabled",
@@ -10,6 +12,10 @@ export const Keys = {
     PLAYLIST_FADE_ENABLED: "playlist-fade-enabled",
     PLAYLIST_FADE_DURATION: "playlist-fade-duration",
     PLAYLIST_LAST_PLAYED: "playlist-last-played",
+
+    MEDIA_TYPE: "background-media-type",
+    IMAGE_PATH: "background-image-path",
+    PHOTO_DURATION: "background-photo-duration-seconds",
 
     VIDEO_PATH: "background-video-path",
     SCALING_MODE: "background-video-scaling-mode",
@@ -32,6 +38,11 @@ export const Keys = {
     MPV_PROFILE: "mpv-profile",
     MPV_CUSTOM_ARGS: "mpv-custom-args",
 };
+
+export const MediaType = {
+    VIDEO: 0,
+    IMAGES: 1,
+}
 
 export const ScalingMode = {
     STRETCH: 0,

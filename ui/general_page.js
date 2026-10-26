@@ -4,9 +4,9 @@ import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import GObject from 'gi://GObject';
 
-import { Keys } from '../enums.js';
+import { Keys, MediaType } from '../enums.js';
 import { logError } from '../utils/logging.js';
-import { listMediaFiles } from '../utils/media_files.js';
+import { listMediaFiles, listImageFiles } from '../utils/media_files.js';
 
 function isDismissed(error) {
     return error.matches(Gtk.DialogError, Gtk.DialogError.DISMISSED);
@@ -23,17 +23,172 @@ class LLSGeneralPage extends Adw.PreferencesPage {
 
         this._settings = settings;
 
-        this.add(this._buildVideoGroup());
-        this.add(this._buildPlaylistGroup());
-        this.add(this._buildEventsGroup());
+        const commonGroup = this._buildCommonGroup();
+        const videoGroup = this._buildVideoGroup();
+        const imageGroup = this._buildImageGroup();
+        const playlistGroup = this._buildPlaylistGroup();
+        const eventsGroup = this._buildEventsGroup();
+
+        this.add(this._buildMediaTypeGroup());
+        this.add(commonGroup);
+        this.add(videoGroup);
+        this.add(imageGroup);
+        this.add(playlistGroup);
+        this.add(eventsGroup);
         this.add(this._buildPerformanceGroup());
         this.add(this._buildAdvancedGroup());
+
+        // Video-only groups are hidden while images are selected, and vice versa
+        const toggleGroups = () => {
+            const images = this._settings.get_int(Keys.MEDIA_TYPE) === MediaType.IMAGES;
+            videoGroup.set_visible(!images);
+            playlistGroup.set_visible(!images);
+            this._actionOnEndRow.set_visible(!images);
+            imageGroup.set_visible(images);
+        };
+        toggleGroups();
+        this._settings.connect(`changed::${Keys.MEDIA_TYPE}`, toggleGroups);
+    }
+
+    _buildMediaTypeGroup() {
+        const group = new Adw.PreferencesGroup();
+        // Order matches MediaType
+        const row = new Adw.ComboRow({
+            title: 'Background type',
+            subtitle: 'Play videos or show random still images',
+            model: Gtk.StringList.new(['Video', 'Images']),
+        });
+        this._settings.bind(Keys.MEDIA_TYPE, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        group.add(row);
+        return group;
+    }
+
+    _buildImageGroup() {
+        const group = new Adw.PreferencesGroup({
+            title: 'Images',
+            description: 'The selected folder and all nested folders are scanned for images, which are shown in random order.',
+        });
+        group.add(this._buildImageFolderRow());
+        group.add(this._buildPhotoDurationRow());
+        return group;
+    }
+
+    _buildPhotoDurationRow() {
+        const row = new Adw.SpinRow({
+            title: 'Image duration',
+            subtitle: 'How long each image stays on screen',
+            adjustment: new Gtk.Adjustment({
+                lower: 1,
+                upper: 3600,
+                step_increment: 1,
+                value: this._settings.get_int(Keys.PHOTO_DURATION),
+            }),
+        });
+
+        row.add_suffix(new Gtk.Label({
+            label: 's',
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        }));
+
+        row.connect('notify::value', r => {
+            this._settings.set_int(Keys.PHOTO_DURATION, r.get_value());
+        });
+
+        return row;
+    }
+
+    _buildImageFolderRow() {
+        const row = new Adw.ActionRow({ title: 'Image folder' });
+        row.set_use_markup(false);
+
+        const countLabel = new Gtk.Label({
+            valign: Gtk.Align.CENTER,
+            css_classes: ['dim-label'],
+        });
+        row.add_suffix(countLabel);
+
+        const button = new Gtk.Button({
+            label: 'Choose Folder',
+            valign: Gtk.Align.CENTER,
+        });
+        button.connect('clicked', () => this._openImageFolderDialog(row, countLabel));
+        row.add_suffix(button);
+
+        this._updateImageFolderRow(row, countLabel);
+        return row;
+    }
+
+    _updateImageFolderRow(row, countLabel) {
+        const path = this._settings.get_string(Keys.IMAGE_PATH);
+        row.subtitle = path === '' ? 'None' : path;
+
+        const count = path === '' ? 0 : listImageFiles(path).length;
+        countLabel.visible = path !== '';
+        countLabel.label = count === 1 ? '1 image' : `${count} images`;
+
+        if (path !== '' && count === 0)
+            row.add_css_class('error');
+        else
+            row.remove_css_class('error');
+    }
+
+    _openImageFolderDialog(row, countLabel) {
+        const dialog = new Gtk.FileDialog({ title: 'Select Image Folder' });
+
+        const imagePath = this._settings.get_string(Keys.IMAGE_PATH);
+        if (imagePath)
+            dialog.set_initial_folder(Gio.File.new_for_path(imagePath));
+
+        dialog.select_folder(row.get_root(), null, (d, result) => {
+            try {
+                const folder = d.select_folder_finish(result);
+                this._settings.set_string(Keys.IMAGE_PATH, folder?.get_path() ?? '');
+                this._updateImageFolderRow(row, countLabel);
+            } catch (e) {
+                if (!isDismissed(e))
+                    logError(`Error selecting image folder: ${e}`);
+            }
+        });
+    }
+
+    // Options shared by videos and images
+    _buildCommonGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Display and power' });
+        group.add(this._buildScalingRow());
+        group.add(this._buildBatteryRow());
+
+        const keepScreenOnRow = this._buildKeepScreenOnRow();
+        const acOnlyRow = this._buildKeepScreenOnAcOnlyRow();
+        acOnlyRow.set_sensitive(keepScreenOnRow.active);
+        keepScreenOnRow.connect('notify::active', row => acOnlyRow.set_sensitive(row.active));
+        group.add(keepScreenOnRow);
+        group.add(acOnlyRow);
+        return group;
+    }
+
+    _buildKeepScreenOnRow() {
+        const row = new Adw.SwitchRow({
+            title: 'Keep screen on',
+            subtitle: 'Prevent the screen from immediately turning off when locked. ' +
+                'It still turns off after the normal timeout set in system settings.',
+        });
+        this._settings.bind(Keys.ENABLE_UNBLANK, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
+    }
+
+    _buildKeepScreenOnAcOnlyRow() {
+        const row = new Adw.SwitchRow({
+            title: 'Only on AC power',
+            subtitle: 'Apply Keep screen on only while the device is plugged in.',
+        });
+        this._settings.bind(Keys.UNBLANK_ON_AC_ONLY, row, 'active', Gio.SettingsBindFlags.DEFAULT);
+        return row;
     }
 
     _buildVideoGroup() {
         const group = new Adw.PreferencesGroup();
         group.add(this._buildSourceRow());
-        group.add(this._buildScalingRow());
         group.add(this._buildVolumeRow());
         group.add(this._buildMprisRow());
         return group;
@@ -55,13 +210,6 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         });
         group.add(this._buildActionOnEndRow());
         group.add(this._buildActionOnBlankRow());
-        group.add(this._buildBatteryRow());
-        group.add(this._buildFootnote(
-            'To keep the screen from blanking use the ' +
-            '<a href="https://extensions.gnome.org/extension/1414/unblank/">' +
-            'Unblank lock screen</a> extension.',
-            { markup: true }
-        ));
         return group;
     }
 
@@ -209,7 +357,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         // Order matches ScalingMode
         const row = new Adw.ComboRow({
             title: 'Scaling mode',
-            subtitle: 'How the video is scaled to fit the screen',
+            subtitle: 'How the video or image is scaled to fit the screen',
             model: Gtk.StringList.new(['Stretch', 'Fit', 'Cover']),
         });
         this._settings.bind(Keys.SCALING_MODE, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
@@ -247,6 +395,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
             model: Gtk.StringList.new(['Loop', 'Pause', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_END, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
+        this._actionOnEndRow = row;
         return row;
     }
 
