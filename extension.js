@@ -10,28 +10,21 @@ import Shell from 'gi://Shell';
 import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 
-import { Keys, ScalingMode } from './enums.js';
-import { MpvPlayerProcess } from './core/mpv_player_process.js';
+import { Keys } from './enums.js';
+import { Slideshow } from './core/slideshow.js';
 import { UnblankManager } from './unblank.js';
 
 import { isOnBattery } from './utils/battery.js';
-import { SHELL_VERSION } from './utils/shell_version.js';
 import { logInfo, logWarn, logError } from './utils/logging.js';
 import { sleep, destroySleeps } from './utils/base.js';
 
-import { isMpvAvailable } from './utils/check_dependencies.js';
-import { sendErrorNotification } from './utils/notifications.js';
-
 const MAX_DIALOG_INJECT_ATTEMPTS = 100;
 const DIALOG_INJECT_INTERVAL = 100;
-const WINDOW_TIMEOUT = 10000;
 const SUPPORTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tif', 'tiff'];
 
 export default class ScreenSaverExtension extends Extension {
     _backgroundCreated = false;
     _wrapperActors = [];
-    _windowActor = null;
-    _window = null;
     _promptShown = false;
     _injectionManager = null;
     _player = null;
@@ -54,8 +47,6 @@ export default class ScreenSaverExtension extends Extension {
     _resetLockState() {
         this._backgroundCreated = false;
         this._wrapperActors = [];
-        this._windowActor = null;
-        this._window = null;
 
         this._promptShown = false;
         this._injectionManager = null;
@@ -85,24 +76,19 @@ export default class ScreenSaverExtension extends Extension {
             return;
         }
 
-        if (!isMpvAvailable()) {
-            sendErrorNotification('ScreenSaver requires mpv to load and rotate images. See README.md for installation instructions.');
-            logError('mpv is not available');
-            return;
-        }
-
         const loop = this._settings.get_boolean(Keys.LOOPED);
         const photoDuration = this._settings.get_int(Keys.PHOTO_DURATION);
 
-        this._player = new MpvPlayerProcess({
+        this._player = new Slideshow({
             imagePaths,
             photoDuration,
             loop,
+            scalingMode: this._settings.get_int(Keys.SCALING_MODE),
+            fadeDuration: this._settings.get_int(Keys.FADE_IN_DURATION),
         });
 
         logInfo(`Loaded ${imagePaths.length} image${imagePaths.length === 1 ? '' : 's'} from ${sourcePath}`);
 
-        await this._player.run();
         await this._onPlayerInit();
     }
 
@@ -188,7 +174,6 @@ export default class ScreenSaverExtension extends Extension {
 
     async _onPlayerInit() {
         this._fadeInDuration = this._settings.get_int(Keys.FADE_IN_DURATION);
-        this._scalingMode = this._settings.get_int(Keys.SCALING_MODE);
         this._blurRadius = this._settings.get_int(Keys.BLUR_RADIUS);
         this._blurBrightness = this._settings.get_double(Keys.BLUR_BRIGHTNESS);
 
@@ -220,31 +205,13 @@ export default class ScreenSaverExtension extends Extension {
             }
         );
 
-        const win = await this._player.waitForWindow(WINDOW_TIMEOUT);
-
-        this._window = win;
-        this._windowActor = win.get_compositor_private();
-
-        if (SHELL_VERSION > 48)
-            this._window.unmaximize();
-        else
-            this._window.unmaximize(true);
-
-        const parent = this._windowActor.get_parent();
-        if (parent)
-            parent.remove_child(this._windowActor);
-
-        global.stage.add_child(this._windowActor);
-        global.stage.set_child_below_sibling(this._windowActor, null);
-        this._windowActor.opacity = 0;
-
         await this._injectIntoDialog();
     }
 
     async _waitForFullLoad() {
         while (true) {
             const dialog = Main.screenShield?._dialog;
-            const ready = !!dialog && !!this._player && this._player.w > 0;
+            const ready = !!dialog && !!this._player;
             if (ready)
                 return dialog;
 
@@ -395,9 +362,6 @@ export default class ScreenSaverExtension extends Extension {
         if (!Main.screenShield?._dialog)
             return;
 
-        if (this._player.shouldResize)
-            this._window.move_resize_frame(true, 0, 0, this._player.w, this._player.h);
-
         const isLastMonitor = monitorIndex === Main.layoutManager.monitors.length - 1;
         const monitor = Main.layoutManager.monitors[monitorIndex];
         const wrapper = new Clutter.Actor();
@@ -408,9 +372,7 @@ export default class ScreenSaverExtension extends Extension {
         Main.screenShield._dialog._backgroundGroup.add_child(wrapper);
         Main.screenShield._dialog._backgroundGroup.set_child_above_sibling(wrapper, null);
 
-        const cloneActor = new Clutter.Clone({
-            source: this._windowActor,
-        });
+        const view = this._player.createView(monitor.width, monitor.height);
 
         wrapper.add_effect(new Shell.BlurEffect(this._blurEffect));
 
@@ -424,15 +386,12 @@ export default class ScreenSaverExtension extends Extension {
         if (!this._backgroundCreated)
             wrapper.opacity = 0;
 
-        wrapper.add_child(cloneActor);
-        wrapper.set_child_above_sibling(cloneActor, null);
+        wrapper.add_child(view);
         this._wrapperActors.push(wrapper);
 
         wrapper.set_position(monitor.x, monitor.y);
         wrapper.set_size(monitor.width, monitor.height);
         wrapper.set_clip_to_allocation(true);
-
-        this._applyScaling(cloneActor, monitor.width, monitor.height);
 
         if (!this._backgroundCreated && isLastMonitor) {
             this._initLoginManager();
@@ -440,39 +399,6 @@ export default class ScreenSaverExtension extends Extension {
             this._player.play();
 
             this._backgroundCreated = true;
-        }
-    }
-
-    _applyScaling(cloneActor, targetW, targetH) {
-        const W = this._player.w;
-        const H = this._player.h;
-
-        cloneActor.set_size(W, H);
-
-        switch (this._scalingMode) {
-        case ScalingMode.STRETCH: {
-            cloneActor.set_scale(targetW / W, targetH / H);
-            cloneActor.set_position(0, 0);
-            break;
-        }
-        case ScalingMode.FIT: {
-            const scale = Math.min(targetW / W, targetH / H);
-            const w = W * scale;
-            const h = H * scale;
-
-            cloneActor.set_scale(scale, scale);
-            cloneActor.set_position((targetW - w) / 2, (targetH - h) / 2);
-            break;
-        }
-        default: {
-            const scale = Math.max(targetW / W, targetH / H);
-            const w = W * scale;
-            const h = H * scale;
-
-            cloneActor.set_scale(scale, scale);
-            cloneActor.set_position((targetW - w) / 2, (targetH - h) / 2);
-            break;
-        }
         }
     }
 
@@ -509,17 +435,6 @@ export default class ScreenSaverExtension extends Extension {
         this._injectAttempts = 0;
 
         Main.screenShield?._dialog?._swipeTracker?.disconnectObject(this);
-
-        if (this._windowActor) {
-            // Mutter owns the lifecycle of this actor; destroying it here can crash the
-            // compositor when the lock screen is tearing down during unlock.
-            const parent = this._windowActor.get_parent();
-            if (parent)
-                parent.remove_child(this._windowActor);
-            this._windowActor.hide();
-            this._windowActor = null;
-        }
-        this._window = null;
 
         this._player?.destroy();
         this._player = null;

@@ -11,7 +11,7 @@
 
 # ScreenSaver
 
-Current release: v1.0.5
+Current release: v1.1.0
 
 A GNOME Shell extension that rotates images as your lock screen background.
 
@@ -67,17 +67,7 @@ It is designed to be simple, lightweight, and reliable.
 ## Requirements
 
 - GNOME Shell 46+
-- mpv:
-  ```bash
-  # Fedora
-  sudo dnf install mpv
-
-  # Ubuntu/Debian
-  sudo apt install mpv
-
-  # Arch
-  sudo pacman -S mpv
-  ```
+- No additional dependencies; images are rendered natively by GNOME Shell.
 
 ## Supported image formats
 
@@ -92,26 +82,18 @@ ScreenSaver scans for files with these extensions:
 - `.tif`
 - `.tiff`
 
-## mpv test command
-
-Use this command to verify that mpv finds the same files ScreenSaver expects and rotates them on screen:
-
-```bash
-find "/absolute/path/to/your/image-folder" -type f \
-  \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.bmp' -o -iname '*.tif' -o -iname '*.tiff' \) \
-  | sort \
-  | mpv --no-audio --vo=gpu-next --keepaspect=no --keep-open=yes --image-display-duration=10 --shuffle --loop-playlist=inf --playlist=-
-```
-
-Adjust `--image-display-duration=10` if you want to test a different slide duration.
-
 ## Notes
 
-- ScreenSaver uses mpv only.
+- Images are displayed natively through GNOME Shell `St.Widget` layers; mpv is no longer required.
 - The selected folder itself is scanned, not just its subfolders.
-- If only one supported image is found, mpv will keep showing that image and loop it when looping is enabled.
+- If only one supported image is found, it stays on screen without rotating.
 
 ## Version notes
+
+### v1.1.0
+
+- Removed the mpv dependency entirely; slideshow playback now uses native GNOME Shell `St.Widget` layers with cross-fade transitions.
+- Removed the missing-dependency preferences page and mpv availability checks.
 
 ### v1.0.5
 
