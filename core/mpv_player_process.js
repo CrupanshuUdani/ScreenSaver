@@ -5,6 +5,8 @@ import { logError, logWarn } from '../utils/logging.js';
 import { sleep } from '../utils/base.js';
 import { ActionOnEnd, MpvProfile } from '../enums.js';
 
+const IMAGE_EXTENSIONS = /\.(jpe?g|png|webp|bmp|tiff?|avif|heic|heif|jxl|svg|ico)$/i;
+
 const logErrorMpv = (msg) => logError(`MpvPlayerProcess: ${msg}`);
 const logWarnMpv = (msg) => logWarn(`MpvPlayerProcess: ${msg}`);
 
@@ -125,8 +127,9 @@ export class MpvPlayerProcess {
         if (transparencyArg)
             args.push(transparencyArg);
 
-        if (this._actionOnEnd === ActionOnEnd.LOOP)
-            args.push('--loop');
+        // Loop is per file, static images never loop so the playlist keeps moving
+        if (this._shouldLoop(this._playlist.current()))
+            args.push('--loop-file=inf');
 
         if (this._imageDuration > 0)
             args.push(`--image-display-duration=${this._imageDuration}`);
@@ -390,11 +393,26 @@ export class MpvPlayerProcess {
         }
     }
 
+    // With several files "loop" repeats the whole playlist, only a single video repeats itself
+    _shouldLoop(path) {
+        return this._actionOnEnd === ActionOnEnd.LOOP &&
+            this._playlist.size === 1 && !this._isStaticImage(path);
+    }
+
+    _isStaticImage(path) {
+        return IMAGE_EXTENSIONS.test(path ?? '');
+    }
+
     _onVideoEnd() {
         //NOTE:
         // Loop is handled by mpv itself and pause keeps the last frame.
-        // The order of the videos is up to the playlist
-        if (this._actionOnEnd !== ActionOnEnd.NEXT)
+        // The order of the videos is up to the playlist.
+        // With several files, loop moves on to the next file and static images always do
+        const advances = this._playlist.size > 1 && (
+            this._actionOnEnd !== ActionOnEnd.PAUSE ||
+            this._isStaticImage(this._playlist.current())
+        );
+        if (this._actionOnEnd !== ActionOnEnd.NEXT && !advances)
             return;
 
         if (this._onNext)
@@ -405,6 +423,8 @@ export class MpvPlayerProcess {
 
     _loadFile(path) {
         this._queueCommand('loadfile', path, 'replace');
+        this._queueCommand('set_property', 'loop-file',
+            this._shouldLoop(path) ? 'inf' : 'no');
 
         // mpv keeps the pause state across files, this is just in case
         if (this._shouldPlay)

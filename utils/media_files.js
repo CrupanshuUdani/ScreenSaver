@@ -17,36 +17,46 @@ function isSupportedMedia(contentType, includeImages) {
 }
 
 /**
- * Lists the videos and GIFs (and static images if enabled) placed directly inside a directory.
- * Sub-directories and hidden files are ignored.
+ * Recursively lists the videos and GIFs (and static images if enabled) inside a directory.
+ * Hidden files and folders are ignored.
  *
  * @param {string} dirPath - Absolute path of the directory
  * @param {boolean} [includeImages] - Also list static images
  * @returns {string[]} Absolute paths in natural (human) order
  */
 export function listMediaFiles(dirPath, includeImages = false) {
-    const dir = Gio.File.new_for_path(dirPath);
     const paths = [];
-    let enumerator = null;
+    const pending = [Gio.File.new_for_path(dirPath)];
 
-    try {
-        enumerator = dir.enumerate_children(
-            FILE_ATTRIBUTES, Gio.FileQueryInfoFlags.NONE, null
-        );
+    while (pending.length > 0) {
+        const dir = pending.pop();
+        let enumerator = null;
 
-        let info;
-        while ((info = enumerator.next_file(null)) !== null) {
-            if (info.get_is_hidden())
-                continue;
+        try {
+            enumerator = dir.enumerate_children(
+                `${FILE_ATTRIBUTES},standard::type`, Gio.FileQueryInfoFlags.NONE, null
+            );
 
-            const contentType = info.get_attribute_string('standard::fast-content-type');
-            if (isSupportedMedia(contentType, includeImages))
-                paths.push(dir.get_child(info.get_name()).get_path());
+            let info;
+            while ((info = enumerator.next_file(null)) !== null) {
+                if (info.get_is_hidden())
+                    continue;
+
+                const child = dir.get_child(info.get_name());
+                if (info.get_file_type() === Gio.FileType.DIRECTORY) {
+                    pending.push(child);
+                    continue;
+                }
+
+                const contentType = info.get_attribute_string('standard::fast-content-type');
+                if (isSupportedMedia(contentType, includeImages))
+                    paths.push(child.get_path());
+            }
+        } catch (e) {
+            logWarn(`Failed to read directory "${dir.get_path()}": ${e.message}`);
+        } finally {
+            enumerator?.close(null);
         }
-    } catch (e) {
-        logWarn(`Failed to read directory "${dirPath}": ${e.message}`);
-    } finally {
-        enumerator?.close(null);
     }
 
     return paths.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));

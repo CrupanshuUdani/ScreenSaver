@@ -285,7 +285,7 @@ class LLSGeneralPage extends Adw.PreferencesPage {
     _buildActionOnEndRow() {
         const row = new Adw.ComboRow({
             title: 'On video end',
-            subtitle: 'What to do when the video finishes playing',
+            subtitle: 'What to do when the video finishes. With several files, Loop plays the whole playlist',
             model: Gtk.StringList.new(['Loop', 'Pause', 'Next video']),
         });
         this._settings.bind(Keys.ACTION_ON_END, row, 'selected', Gio.SettingsBindFlags.DEFAULT);
@@ -365,7 +365,9 @@ class LLSGeneralPage extends Adw.PreferencesPage {
         else
             row.subtitle = path;
 
-        const count = isFolder ? listMediaFiles(path, this._settings.get_boolean(Keys.STATIC_IMAGE_ENABLED)).length : 0;
+        const count = isFolder ? listMediaFiles(
+            path, this._settings.get_boolean(Keys.STATIC_IMAGE_ENABLED)
+        ).length : 0;
         this._sourceCountLabel.visible = isFolder;
         this._sourceCountLabel.label = count === 1 ? '1 file' : `${count} files`;
 
