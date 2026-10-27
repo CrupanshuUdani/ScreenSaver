@@ -8,19 +8,23 @@ const FILE_ATTRIBUTES = [
     'standard::is-hidden',
 ].join(',');
 
-function isSupportedMedia(contentType) {
-    return !!contentType &&
-        (contentType.startsWith('video/') || contentType === 'image/gif');
+function isSupportedMedia(contentType, includeImages) {
+    if (!contentType)
+        return false;
+
+    return contentType.startsWith('video/') || contentType === 'image/gif' ||
+        (includeImages && contentType.startsWith('image/'));
 }
 
 /**
- * Lists the videos and GIFs placed directly inside a directory.
+ * Lists the videos and GIFs (and static images if enabled) placed directly inside a directory.
  * Sub-directories and hidden files are ignored.
  *
  * @param {string} dirPath - Absolute path of the directory
+ * @param {boolean} [includeImages] - Also list static images
  * @returns {string[]} Absolute paths in natural (human) order
  */
-export function listMediaFiles(dirPath) {
+export function listMediaFiles(dirPath, includeImages = false) {
     const dir = Gio.File.new_for_path(dirPath);
     const paths = [];
     let enumerator = null;
@@ -36,7 +40,7 @@ export function listMediaFiles(dirPath) {
                 continue;
 
             const contentType = info.get_attribute_string('standard::fast-content-type');
-            if (isSupportedMedia(contentType))
+            if (isSupportedMedia(contentType, includeImages))
                 paths.push(dir.get_child(info.get_name()).get_path());
         }
     } catch (e) {
@@ -54,9 +58,10 @@ export function listMediaFiles(dirPath) {
  * file is returned as is.
  *
  * @param {string} path - File or directory path
+ * @param {boolean} [includeImages] - Also list static images inside a directory
  * @returns {string[]} Empty if the path is missing or has nothing to play
  */
-export function resolveMediaPaths(path) {
+export function resolveMediaPaths(path, includeImages = false) {
     if (!path)
         return [];
 
@@ -64,54 +69,9 @@ export function resolveMediaPaths(path) {
         .query_file_type(Gio.FileQueryInfoFlags.NONE, null);
 
     if (type === Gio.FileType.DIRECTORY)
-        return listMediaFiles(path);
+        return listMediaFiles(path, includeImages);
     if (type === Gio.FileType.REGULAR)
         return [path];
 
     return [];
-}
-
-function isSupportedImage(contentType) {
-    return !!contentType && contentType.startsWith('image/') && contentType !== 'image/gif';
-}
-
-/**
- * Recursively lists the still images inside a folder (GIFs are handled as videos).
- * Hidden files and folders are ignored.
- *
- * @param {string} dirPath - Absolute path of the folder
- * @returns {string[]} Absolute paths in natural (human) order
- */
-export function listImageFiles(dirPath) {
-    const paths = [];
-    const pending = [Gio.File.new_for_path(dirPath)];
-
-    while (pending.length > 0) {
-        const dir = pending.pop();
-        let enumerator = null;
-
-        try {
-            enumerator = dir.enumerate_children(
-                `${FILE_ATTRIBUTES},standard::type`, Gio.FileQueryInfoFlags.NONE, null
-            );
-
-            let info;
-            while ((info = enumerator.next_file(null)) !== null) {
-                if (info.get_is_hidden())
-                    continue;
-
-                const child = dir.get_child(info.get_name());
-                if (info.get_file_type() === Gio.FileType.DIRECTORY)
-                    pending.push(child);
-                else if (isSupportedImage(info.get_attribute_string('standard::fast-content-type')))
-                    paths.push(child.get_path());
-            }
-        } catch (e) {
-            logWarn(`Failed to read directory "${dir.get_path()}": ${e.message}`);
-        } finally {
-            enumerator?.close(null);
-        }
-    }
-
-    return paths.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }

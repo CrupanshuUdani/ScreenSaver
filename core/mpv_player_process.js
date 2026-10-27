@@ -38,7 +38,7 @@ export class MpvPlayerProcess {
     constructor({
         playlist, actionOnEnd = ActionOnEnd.LOOP, 
         volume,
-        useVideorate = false, framerate, imageDuration = 0,
+        useVideorate = false, framerate, imageDuration = 5,
         onSizeChange, onPauseChange, onFileChange, onNext, onPlaybackRestart,
         configPath,
         profile = MpvProfile.QUALITY, customArgs = [],
@@ -60,7 +60,7 @@ export class MpvPlayerProcess {
         this._volume = volume;
         this._useVideorate = useVideorate;
         this._framerate = framerate;
-        // Seconds each image stays on screen, 0 when playing videos
+        // Seconds each static image stays on screen
         this._imageDuration = imageDuration;
 
         this._onSizeChange = onSizeChange;
@@ -131,8 +131,9 @@ export class MpvPlayerProcess {
         if (this._imageDuration > 0)
             args.push(`--image-display-duration=${this._imageDuration}`);
 
-        if (this._useVideorate && !this._imageDuration)
-            args.push(`--vf=fps=${this._framerate}`);
+        // TODO: --vf=fps does not work with static images, re-enable once handled
+        // if (this._useVideorate)
+        //     args.push(`--vf=fps=${this._framerate}`);
 
         // "--" so a file name starting with "-" is not parsed as an option
         args.push('--', this._playlist.current());

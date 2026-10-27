@@ -43,27 +43,14 @@
             <summary>Whether the video can be controlled with media keys and other MPRIS clients</summary>
         </key>
 
-        <key name="enable-unblank" type="b">
-            <default>true</default>
-            <summary>Prevent the screen from immediately turning off when locked</summary>
-        </key>
-        <key name="unblank-on-ac-only" type="b">
+        <key name="general-static-image-enabled" type="b">
             <default>false</default>
-            <summary>Only keep the screen on while the device is not on battery power</summary>
-        </key>
-        <key name="background-media-type" type="i">
-            <range min="0" max="1" />
-            <default>0</default>
-            <summary>Background media type (0 = video, 1 = random images)</summary>
-        </key>
-        <key name="background-image-path" type="s">
-            <default>""</default>
-            <summary>Path to the folder scanned for background images</summary>
+            <summary>Also play static images from the selected file or folder</summary>
         </key>
         <key name="background-photo-duration-seconds" type="i">
             <range min="1" max="3600" />
-            <default>10</default>
-            <summary>How long each image is displayed</summary>
+            <default>5</default>
+            <summary>How long each static image is displayed</summary>
         </key>
         <key name="background-video-path" type="s">
             <default>""</default>

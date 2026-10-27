@@ -1,13 +1,12 @@
 import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
-import { Keys, ActionOnBlank, ActionOnEnd, MediaType, PlaylistOrder, PlaylistStart } from './enums.js';
+import { Keys, ActionOnBlank } from './enums.js';
 
-import { resolveMediaPaths, listImageFiles } from './utils/media_files.js';
+import { resolveMediaPaths } from './utils/media_files.js';
 import { logWarn, logError } from './utils/logging.js';
 import { destroySleeps } from './utils/base.js';
 import { isMpvAvailable } from './utils/check_dependencies.js';
 import { sendErrorNotification } from './utils/notifications.js';
 
-import { UnblankManager } from './unblank.js';
 import { DialogInjector } from './core/dialog_injector.js';
 import { VideoRenderer } from './core/video_renderer.js';
 import { MpvPlayerProcess } from './core/mpv_player_process.js';
@@ -32,7 +31,6 @@ export default class LockscreenExtension extends Extension {
         // Last pause state reported by mpv
         this._playerPaused = true;
         this._settings = this.getSettings();
-        this._unblankManager = new UnblankManager(this);
 
         this._setup().catch((e) => {
             logError(`Unable to setup extension: ${e}`);
@@ -44,9 +42,7 @@ export default class LockscreenExtension extends Extension {
         if (!this._checkMpv())
             return;
 
-        this._imagesMode = this._settings.get_int(Keys.MEDIA_TYPE) === MediaType.IMAGES;
-
-        const videoPaths = this._imagesMode ? this._getImagePaths() : this._getVideoPaths();
+        const videoPaths = this._getVideoPaths();
         if (!videoPaths)
             return;
 
@@ -83,11 +79,12 @@ export default class LockscreenExtension extends Extension {
             return null;
         }
 
-        // The saved path can point to a single file or to a folder of videos
-        const videoPaths = resolveMediaPaths(videoPath);
+        // The saved path can point to a single file or to a folder of media
+        const includeImages = this._settings.get_boolean(Keys.STATIC_IMAGE_ENABLED);
+        const videoPaths = resolveMediaPaths(videoPath, includeImages);
         if (videoPaths.length === 0) {
             sendErrorNotification(
-                `No supported videos or GIFs found at "${videoPath}". ` +
+                `No supported media found at "${videoPath}". ` +
                 `Falling back to the default lock screen.`
             );
             logError(`Nothing to play at "${videoPath}"`);
@@ -95,26 +92,6 @@ export default class LockscreenExtension extends Extension {
         }
 
         return videoPaths;
-    }
-
-    _getImagePaths() {
-        const imagePath = this._settings.get_string(Keys.IMAGE_PATH);
-        if (!imagePath) {
-            logWarn('Image folder not set, falling back');
-            return null;
-        }
-
-        const imagePaths = listImageFiles(imagePath);
-        if (imagePaths.length === 0) {
-            sendErrorNotification(
-                `No supported images found in "${imagePath}". ` +
-                `Falling back to the default lock screen.`
-            );
-            logError(`No images at "${imagePath}"`);
-            return null;
-        }
-
-        return imagePaths;
     }
 
     /**
@@ -139,30 +116,21 @@ export default class LockscreenExtension extends Extension {
     _createPlaylist(videoPaths) {
         const playlist = new Playlist({
             videos: videoPaths,
-            // Images are always shown in random order
-            order: this._imagesMode
-                ? PlaylistOrder.RANDOM
-                : this._settings.get_int(Keys.PLAYLIST_ORDER),
-            start: this._imagesMode
-                ? PlaylistStart.RANDOM
-                : this._settings.get_int(Keys.PLAYLIST_START),
+            order: this._settings.get_int(Keys.PLAYLIST_ORDER),
+            start: this._settings.get_int(Keys.PLAYLIST_START),
             //NOTE: Last played is the name of the file, because keeping 
             // index is unreliable
             lastPlayed: this._settings.get_string(Keys.PLAYLIST_LAST_PLAYED),
         });
-        if (!this._imagesMode)
-            this._saveLastPlayed(playlist.current());
+        this._saveLastPlayed(playlist.current());
         return playlist;
     }
 
     _setupPlayer(playlist) {
         this._player = new MpvPlayerProcess({
             playlist,
-            // Images always advance on their own, a single image just stays
-            actionOnEnd: !this._imagesMode
-                ? this._settings.get_int(Keys.ACTION_ON_END)
-                : playlist.size > 1 ? ActionOnEnd.NEXT : ActionOnEnd.PAUSE,
-            imageDuration: this._imagesMode ? this._settings.get_int(Keys.PHOTO_DURATION) : 0,
+            actionOnEnd: this._settings.get_int(Keys.ACTION_ON_END),
+            imageDuration: this._settings.get_int(Keys.PHOTO_DURATION),
             volume: this._settings.get_int(Keys.AUDIO_VOLUME) / 100,
             useVideorate: this._settings.get_boolean(Keys.USE_VIDEORATE),
             framerate: this._settings.get_int(Keys.FRAMERATE),
@@ -182,8 +150,7 @@ export default class LockscreenExtension extends Extension {
             },
             onFileChange: (path) => {
                 this._mpris?.setTrack(path);
-                if (!this._imagesMode)
-                    this._saveLastPlayed(path);
+                this._saveLastPlayed(path);
             },
             onNext: () => this._switchVideo(() => this._player?.next()),
             // The new video is ready, end the blackout started by _switchVideo()
@@ -381,8 +348,6 @@ export default class LockscreenExtension extends Extension {
     disable() {
         destroySleeps();
 
-        this._unblankManager?.destroy();
-        this._unblankManager = null;
         
         this._mpris?.destroy();
         this._batteryWatcher?.destroy();

@@ -5,7 +5,7 @@
 # Live Lock Screen
 
 **Bring your lock screen to life.**<br>
-Play videos and GIFs on the GNOME lock screen.
+Play videos, GIFs and images on the GNOME lock screen.
 
 <p>
   <img alt="GNOME Shell 46+" src="https://img.shields.io/badge/GNOME_Shell-46%2B-4A86CF?style=for-the-badge&logo=gnome&logoColor=white&labelColor=2B2B2B">
@@ -52,8 +52,7 @@ If you're looking for more advanced lock screen or desktop customization, you ma
 | 🎬 | **Video & GIF playback** | Use any video or GIF as the lock screen background, played by MPV |
 | 📁 | **Playlists** | Pick a folder instead of a single file. Play the videos in order, shuffled, or randomly, and start with the first, a random, or the last played video |
 | 🌑 | **Smooth transitions** | Fades through black when switching videos, so you never see the next one loading. Disable this if you prefer abrupt switching. |
-| 🖼️ | **Random image slideshow** | Switch **General → Background type** to *Images*, choose a folder (scanned recursively) and its pictures are shown in random order, each for a configurable duration. Switch back to *Video* at any time |
-| 💡 | **Keep screen on** | Stops the screen from turning off right after locking, optionally only on AC power. Works with videos and images |
+| 🖼️ | **Static images** | Enable **General → Static images** to also show pictures (JPEG, PNG, WebP, ...) from the same file or folder as videos and GIFs, each for a configurable duration |
 | 🎨 | **Scaling modes** | Cover, fit, or stretch |
 | 🔲 | **Transparency** | Transparent GIFs and videos are shown over the default background |
 | 🖥️ | **Multi-monitor** | Works across all your displays |
@@ -118,11 +117,11 @@ gnome-extensions enable live-lockscreen@nick-redwill
 
 ## Tips
 
-**Videos or images**<br>
-Under **General → Background type** choose *Video* or *Images*. In *Images* mode pick a folder with **Choose Folder**: it is scanned including sub-folders for still images (JPEG, PNG, WebP, BMP, TIFF, ...; GIFs belong to video mode) and they are shown in random order, never the same one twice in a row. **Image duration** sets how long each one stays. Scaling mode, Pause on battery and Keep screen on apply to both modes.
+**Static images**<br>
+Turn on **General → Static images** and the selected **Source** (a file or a folder) may also contain still images; they take part in the playlist like videos and GIFs. **Image duration** sets how long each one stays on screen (default 5 s). The framerate override is currently not applied (disabled until it works with static images).
 
-**Keep the screen from turning off**<br>
-GNOME turns the screen off on the lock screen. Enable **General → Display and power → Keep screen on** (optionally **Only on AC power**) to prevent that, no separate extension is needed. You can also choose what happens to the video when the screen turns off (ignore, pause, restart, or switch to the next video) under **Events → Action on blank**.
+**Screen blanking**<br>
+You can choose what happens to the video when the screen turns off (ignore, pause, restart, or switch to the next video) under **Events → Action on blank**.
 
 **Playback profiles**<br>
 Found under **Performance**:
