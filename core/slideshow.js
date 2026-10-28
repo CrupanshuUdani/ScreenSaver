@@ -4,6 +4,7 @@ import GLib from 'gi://GLib';
 import Cogl from 'gi://Cogl';
 import Clutter from 'gi://Clutter';
 import GdkPixbuf from 'gi://GdkPixbuf';
+import System from 'system';
 
 import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 
@@ -55,6 +56,20 @@ function openStream(file, cancellable) {
             } catch (e) {
                 reject(e);
             }
+        });
+    });
+}
+
+function closeStreamAsync(stream) {
+    if (!stream || stream.is_closed())
+        return Promise.resolve();
+    return new Promise(resolve => {
+        stream.close_async(GLib.PRIORITY_DEFAULT, null, (source, res) => {
+            try {
+                source.close_finish(res);
+            } catch (_) {
+            }
+            resolve();
         });
     });
 }
@@ -158,11 +173,14 @@ export class Slideshow {
         ];
         view._layer = null;
         view._loadSerial = 0;
+        view._loadCancellable = null;
 
         // The lock screen may rebuild its backgrounds (e.g. on monitor
         // changes); forget destroyed views so we neither leak nor touch them.
         view.connect('destroy', () => {
             view._loadSerial++;
+            view._loadCancellable?.cancel();
+            view._loadCancellable = null;
             view._layer = null;
             this._views = this._views.filter(v => v !== view);
         });
@@ -187,11 +205,17 @@ export class Slideshow {
             ];
         }
 
-        const widthRatio = targetWidth / imageWidth;
-        const heightRatio = targetHeight / imageHeight;
+        // For cover mode, also account for potential EXIF orientation swaps
+        // (portrait camera photos with orientation 5-8 stored as landscape),
+        // so the downscaled image has enough pixels to fill the target without
+        // blur after rotation.
         const ratio = this._scalingMode === ScalingMode.FIT
-            ? Math.min(widthRatio, heightRatio)
-            : Math.max(widthRatio, heightRatio);
+            ? Math.min(targetWidth / imageWidth, targetHeight / imageHeight)
+            : Math.max(
+                targetWidth / imageWidth,
+                targetHeight / imageHeight,
+                Math.max(targetWidth, targetHeight) / Math.min(imageWidth, imageHeight)
+            );
         const scale = Math.min(1, ratio);
 
         return [
@@ -200,8 +224,7 @@ export class Slideshow {
         ];
     }
 
-    async _decode(path, targetWidth, targetHeight) {
-        const cancellable = this._cancellable;
+    async _decode(path, targetWidth, targetHeight, cancellable) {
         const [imageWidth, imageHeight] = await queryImageSize(path, cancellable);
         const [width, height] =
             this._decodeSize(imageWidth, imageHeight, targetWidth, targetHeight);
@@ -211,10 +234,7 @@ export class Slideshow {
         try {
             pixbuf = await decodeStream(stream, width, height, cancellable);
         } finally {
-            try {
-                stream.close(null);
-            } catch (_) {
-            }
+            await closeStreamAsync(stream);
         }
 
         pixbuf = pixbuf.apply_embedded_orientation() ?? pixbuf;
@@ -225,22 +245,44 @@ export class Slideshow {
     }
 
     // Monitors sharing the same pixel size share a single decode/texture.
-    _loadContent(path, [width, height]) {
+    // If all views waiting on a pending decode cancel or advance, the decode
+    // is cancelled immediately to prevent pile-up.
+    _loadContent(path, [width, height], cancellable) {
         const key = `${width}x${height}:${path}`;
-        let promise = this._pendingLoads.get(key);
-        if (!promise) {
-            promise = this._decode(path, width, height)
-                .finally(() => this._pendingLoads.delete(key));
-            this._pendingLoads.set(key, promise);
+        let item = this._pendingLoads.get(key);
+        if (!item) {
+            const loadCancellable = new Gio.Cancellable();
+            const cancelId = this._cancellable.connect(() => loadCancellable.cancel());
+            const promise = this._decode(path, width, height, loadCancellable)
+                .finally(() => {
+                    this._cancellable.disconnect(cancelId);
+                    this._pendingLoads.delete(key);
+                });
+            item = { promise, cancellable: loadCancellable, refCount: 0 };
+            this._pendingLoads.set(key, item);
         }
-        return promise;
+
+        item.refCount++;
+        if (cancellable) {
+            cancellable.connect(() => {
+                item.refCount--;
+                if (item.refCount <= 0)
+                    item.cancellable.cancel();
+            });
+        }
+        return item.promise;
     }
 
     _setImage(view, path, animate) {
         const serial = ++view._loadSerial;
 
-        this._loadContent(path, view._pixelSize).then(content => {
-            if (serial !== view._loadSerial || this._cancellable.is_cancelled())
+        // Cancel any pending decode specific to this view before starting the next
+        view._loadCancellable?.cancel();
+        const cancellable = new Gio.Cancellable();
+        view._loadCancellable = cancellable;
+
+        this._loadContent(path, view._pixelSize, cancellable).then(content => {
+            if (serial !== view._loadSerial || cancellable.is_cancelled() || this._cancellable.is_cancelled())
                 return;
             this._showContent(view, content, animate);
         }).catch(e => {
@@ -265,8 +307,25 @@ export class Slideshow {
         if (!old)
             return;
 
+        let destroyed = false;
+        const destroyOld = () => {
+            if (destroyed)
+                return;
+            destroyed = true;
+            if (old.get_parent?.())
+                old.destroy();
+
+            // Prompt GJS / SpiderMonkey to collect the dead JS wrappers for
+            // unreferenced StImageContent and Cogl textures promptly, avoiding
+            // deferral based on JS heap size alone.
+            GLib.idle_add(GLib.PRIORITY_LOW, () => {
+                System.gc();
+                return GLib.SOURCE_REMOVE;
+            });
+        };
+
         if (!animate || this._fadeDuration <= 0) {
-            old.destroy();
+            destroyOld();
             return;
         }
 
@@ -275,9 +334,8 @@ export class Slideshow {
             opacity: 255,
             duration: this._fadeDuration,
             mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
-            // onStopped also fires if the fade is interrupted, so the
-            // previous layer (and its texture) is always released.
-            onStopped: () => old.destroy(),
+            onComplete: destroyOld,
+            onStopped: destroyOld,
         });
     }
 
@@ -319,7 +377,12 @@ export class Slideshow {
     destroy() {
         this.pause();
         this._cancellable.cancel();
+        this._views.forEach(v => {
+            v._loadCancellable?.cancel();
+            v._loadCancellable = null;
+        });
         this._pendingLoads.clear();
         this._views = [];
+        System.gc();
     }
 }
