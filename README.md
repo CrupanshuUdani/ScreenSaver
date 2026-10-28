@@ -117,6 +117,10 @@ ScreenSaver scans for files with these extensions:
 <a href="https://github.com/rinzler69-wastaken/wack-sonoma-lockscreen">
   rinzler69
 </a>
+<br>
+<a href="https://github.com/CrupanshuUdani/ScreenSaver">
+  CrupanshuUdani
+</a>
 
 ## Development
 
