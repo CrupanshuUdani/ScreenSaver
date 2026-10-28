@@ -10,12 +10,13 @@
     "47",
     "48",
     "49",
-    "50"
+    "50",
+    "51"
   ],
   "donations": {
     "buymeacoffee": "rmacordeiro"
   },
   "url": "https://github.com/rmacordeiro/ScreenSaver",
   "uuid": "screensaver@rmacordeiro",
-  "version-name": "1.1.0"
+  "version-name": "1.2.0"
 }

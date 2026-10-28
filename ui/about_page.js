@@ -18,6 +18,7 @@ class ScreenSaverAboutPage extends Adw.PreferencesPage {
 
         this.add(this._buildBannerGroup());
         this.add(this._buildLinksGroup());
+        this.add(this._buildThanksGroup());
     }
 
     _buildBannerGroup() {
@@ -102,6 +103,30 @@ class ScreenSaverAboutPage extends Adw.PreferencesPage {
 
         for (const { title, subtitle, icon, url } of links)
             group.add(this._buildLinkRow(title, subtitle, icon, url));
+
+        return group;
+    }
+
+    _buildThanksGroup() {
+        const group = new Adw.PreferencesGroup({ title: 'Thank you' });
+
+        const people = [
+            {
+                title: 'nick-redwill',
+                url: 'https://github.com/nick-redwill/LiveLockScreen',
+            },
+            {
+                title: 'rinzler69',
+                url: 'https://github.com/rinzler69-wastaken/wack-sonoma-lockscreen',
+            },
+            {
+                title: 'CrupanshuUdani',
+                url: 'https://github.com/CrupanshuUdani/ScreenSaver',
+            },
+        ];
+
+        for (const { title, url } of people)
+            group.add(this._buildLinkRow(title, url, 'avatar-default-symbolic', url));
 
         return group;
     }

@@ -11,7 +11,7 @@
 
 # ScreenSaver
 
-Current release: v1.1.0
+Current release: v1.2.0
 
 A GNOME Shell extension that rotates images as your lock screen background.
 
@@ -90,6 +90,11 @@ ScreenSaver scans for files with these extensions:
 
 ## Version notes
 
+### v1.2.0
+
+- Fixed unbounded memory growth when rotating through large image folders (#14).
+- Added GNOME Shell 51 to the supported versions (static review found no removed or changed APIs in use; not yet tested on a live GNOME 51 session).
+
 ### v1.1.0
 
 - Removed the mpv dependency entirely; slideshow playback now uses native GNOME Shell `St.Widget` layers with cross-fade transitions.
@@ -112,6 +117,14 @@ ScreenSaver scans for files with these extensions:
 <a href="https://github.com/rinzler69-wastaken/wack-sonoma-lockscreen">
   rinzler69
 </a>
+<br>
+<a href="https://github.com/CrupanshuUdani/ScreenSaver">
+  CrupanshuUdani
+</a>
+
+## Development
+
+This project is developed with the assistance of AI tools. All changes are planned or approved by the author, and all AI-generated code is reviewed and tested before it is merged.
 
 ## Support
 
