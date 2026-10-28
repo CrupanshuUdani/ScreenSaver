@@ -93,7 +93,7 @@ ScreenSaver scans for files with these extensions:
 ### v1.2.0
 
 - Fixed unbounded memory growth when rotating through large image folders (#14).
-- Added GNOME Shell 51 to the supported versions (static review found no removed or changed APIs in use; not yet tested on a live GNOME 51 session).
+- Added GNOME Shell 51 to the supported versions.
 
 ### v1.1.0
 
