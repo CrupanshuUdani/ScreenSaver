@@ -372,7 +372,11 @@ export default class ScreenSaverExtension extends Extension {
         Main.screenShield._dialog._backgroundGroup.add_child(wrapper);
         Main.screenShield._dialog._backgroundGroup.set_child_above_sibling(wrapper, null);
 
-        const view = this._player.createView(monitor.width, monitor.height);
+        const view = this._player.createView(
+            monitor.width,
+            monitor.height,
+            this._getMonitorPixelScale(monitor.index ?? monitorIndex)
+        );
 
         wrapper.add_effect(new Shell.BlurEffect(this._blurEffect));
 
@@ -399,6 +403,21 @@ export default class ScreenSaverExtension extends Extension {
             this._player.play();
 
             this._backgroundCreated = true;
+        }
+    }
+
+    // Ratio between framebuffer pixels and the monitor geometry reported by
+    // the layout manager. With scaled stage views (e.g. fractional scaling)
+    // geometry is logical and the UI scale factor is 1; otherwise geometry is
+    // already in physical pixels and the UI scale factor equals the monitor
+    // scale, so the ratio is 1.
+    _getMonitorPixelScale(monitorIndex) {
+        try {
+            const monitorScale = global.display.get_monitor_scale(monitorIndex);
+            const uiScale = St.ThemeContext.get_for_stage(global.stage).scale_factor;
+            return Math.max(1, monitorScale / uiScale);
+        } catch (_) {
+            return 1;
         }
     }
 
