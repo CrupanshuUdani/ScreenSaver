@@ -1,8 +1,16 @@
 import St from 'gi://St';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Cogl from 'gi://Cogl';
 import Clutter from 'gi://Clutter';
+import GdkPixbuf from 'gi://GdkPixbuf';
+
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 
 import { ScalingMode } from '../enums.js';
+import { logWarn } from '../utils/logging.js';
+
+const SHELL_MAJOR = parseInt(Config.PACKAGE_VERSION.split('.')[0], 10);
 
 function shuffle(items) {
     const a = [...items];
@@ -13,7 +21,109 @@ function shuffle(items) {
     return a;
 }
 
+function getCoglContext() {
+    const context = global.stage.context ?? global.stage.get_context?.();
+    const backend = context?.get_backend?.() ?? Clutter.get_default_backend?.();
+    return backend.get_cogl_context();
+}
+
+function isCancelled(e) {
+    return e instanceof GLib.Error && e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
+}
+
+// Reads only the image header, in a worker thread.
+function queryImageSize(path, cancellable) {
+    return new Promise((resolve, reject) => {
+        GdkPixbuf.Pixbuf.get_file_info_async(path, cancellable, (_source, result) => {
+            try {
+                const [format, width, height] = GdkPixbuf.Pixbuf.get_file_info_finish(result);
+                if (!format || width <= 0 || height <= 0)
+                    throw new Error('unrecognized image format');
+                resolve([width, height]);
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
+
+function openStream(file, cancellable) {
+    return new Promise((resolve, reject) => {
+        file.read_async(GLib.PRIORITY_DEFAULT, cancellable, (source, result) => {
+            try {
+                resolve(source.read_finish(result));
+            } catch (e) {
+                reject(e);
+            }
+        });
+    });
+}
+
+// Decodes (and downscales while decoding) in a worker thread.
+function decodeStream(stream, width, height, cancellable) {
+    return new Promise((resolve, reject) => {
+        // Dimensions are pre-computed with the right aspect ratio, so we don't
+        // let GdkPixbuf recompute (and truncate) them.
+        GdkPixbuf.Pixbuf.new_from_stream_at_scale_async(
+            stream, width, height, false, cancellable,
+            (_source, result) => {
+                try {
+                    resolve(GdkPixbuf.Pixbuf.new_from_stream_finish(result));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+    });
+}
+
+// Crops the centre of the pixbuf to the target aspect ratio (for "cover").
+function cropToAspect(pixbuf, targetWidth, targetHeight) {
+    const width = pixbuf.get_width();
+    const height = pixbuf.get_height();
+    const targetAspect = targetWidth / targetHeight;
+
+    let cropWidth = width;
+    let cropHeight = height;
+    if (width / height > targetAspect)
+        cropWidth = Math.max(1, Math.round(height * targetAspect));
+    else
+        cropHeight = Math.max(1, Math.round(width / targetAspect));
+
+    if (cropWidth === width && cropHeight === height)
+        return pixbuf;
+
+    return pixbuf.new_subpixbuf(
+        Math.floor((width - cropWidth) / 2),
+        Math.floor((height - cropHeight) / 2),
+        cropWidth,
+        cropHeight);
+}
+
+function createContent(pixbuf) {
+    const width = pixbuf.get_width();
+    const height = pixbuf.get_height();
+    const rowstride = pixbuf.get_rowstride();
+    const format = pixbuf.get_has_alpha()
+        ? Cogl.PixelFormat.RGBA_8888
+        : Cogl.PixelFormat.RGB_888;
+    const bytes = pixbuf.read_pixel_bytes();
+
+    const content = St.ImageContent.new_with_preferred_size(width, height);
+    // GNOME 48 added a CoglContext parameter to set_bytes().
+    if (SHELL_MAJOR >= 48)
+        content.set_bytes(getCoglContext(), bytes, format, width, height, rowstride);
+    else
+        content.set_bytes(bytes, format, width, height, rowstride);
+    return content;
+}
+
 // Native slideshow: one St.Widget layer per monitor, cross-faded between images.
+//
+// Images are decoded asynchronously at (at most) monitor resolution and
+// uploaded into an St.ImageContent owned by the layer. We deliberately avoid
+// CSS `background-image`: St caches every texture loaded that way (and the
+// theme node for every unique style string) for the lifetime of gnome-shell,
+// so rotating through a large folder made memory grow without bound.
 export class Slideshow {
     constructor({ imagePaths, photoDuration, loop, scalingMode, fadeDuration }) {
         this._photoDuration = photoDuration;
@@ -26,13 +136,15 @@ export class Slideshow {
         this._views = [];
         this._timeoutId = 0;
         this._playing = false;
+        this._cancellable = new Gio.Cancellable();
+        this._pendingLoads = new Map();
     }
 
     get currentPath() {
         return this._order[this._index];
     }
 
-    createView(width, height) {
+    createView(width, height, scale = 1) {
         const view = new St.Widget({
             width,
             height,
@@ -40,36 +152,111 @@ export class Slideshow {
             layout_manager: new Clutter.BinLayout(),
         });
         view._size = [width, height];
+        view._pixelSize = [
+            Math.max(1, Math.ceil(width * scale)),
+            Math.max(1, Math.ceil(height * scale)),
+        ];
         view._layer = null;
+        view._loadSerial = 0;
+
+        // The lock screen may rebuild its backgrounds (e.g. on monitor
+        // changes); forget destroyed views so we neither leak nor touch them.
+        view.connect('destroy', () => {
+            view._loadSerial++;
+            view._layer = null;
+            this._views = this._views.filter(v => v !== view);
+        });
+
         this._views.push(view);
         this._setImage(view, this.currentPath, false);
         return view;
     }
 
-    _style(path, width, height) {
-        let size;
-        switch (this._scalingMode) {
-        case ScalingMode.STRETCH:
-            size = `${width}px ${height}px`;
-            break;
-        case ScalingMode.FIT:
-            size = 'contain';
-            break;
-        default:
-            size = 'cover';
+    _isFillMode() {
+        return this._scalingMode !== ScalingMode.STRETCH &&
+            this._scalingMode !== ScalingMode.FIT;
+    }
+
+    // Size to decode at: never larger than the source or than what the
+    // monitor needs. Any upscaling is left to the GPU via content gravity.
+    _decodeSize(imageWidth, imageHeight, targetWidth, targetHeight) {
+        if (this._scalingMode === ScalingMode.STRETCH) {
+            return [
+                Math.min(imageWidth, targetWidth),
+                Math.min(imageHeight, targetHeight),
+            ];
         }
 
-        const uri = GLib.filename_to_uri(path, null);
-        return `background-image: url("${uri}"); background-size: ${size}; ` +
-            'background-position: center; background-repeat: no-repeat;';
+        const widthRatio = targetWidth / imageWidth;
+        const heightRatio = targetHeight / imageHeight;
+        const ratio = this._scalingMode === ScalingMode.FIT
+            ? Math.min(widthRatio, heightRatio)
+            : Math.max(widthRatio, heightRatio);
+        const scale = Math.min(1, ratio);
+
+        return [
+            Math.max(1, Math.round(imageWidth * scale)),
+            Math.max(1, Math.round(imageHeight * scale)),
+        ];
+    }
+
+    async _decode(path, targetWidth, targetHeight) {
+        const cancellable = this._cancellable;
+        const [imageWidth, imageHeight] = await queryImageSize(path, cancellable);
+        const [width, height] =
+            this._decodeSize(imageWidth, imageHeight, targetWidth, targetHeight);
+
+        const stream = await openStream(Gio.File.new_for_path(path), cancellable);
+        let pixbuf;
+        try {
+            pixbuf = await decodeStream(stream, width, height, cancellable);
+        } finally {
+            try {
+                stream.close(null);
+            } catch (_) {
+            }
+        }
+
+        pixbuf = pixbuf.apply_embedded_orientation() ?? pixbuf;
+        if (this._isFillMode())
+            pixbuf = cropToAspect(pixbuf, targetWidth, targetHeight);
+
+        return createContent(pixbuf);
+    }
+
+    // Monitors sharing the same pixel size share a single decode/texture.
+    _loadContent(path, [width, height]) {
+        const key = `${width}x${height}:${path}`;
+        let promise = this._pendingLoads.get(key);
+        if (!promise) {
+            promise = this._decode(path, width, height)
+                .finally(() => this._pendingLoads.delete(key));
+            this._pendingLoads.set(key, promise);
+        }
+        return promise;
     }
 
     _setImage(view, path, animate) {
-        const [width, height] = view._size;
+        const serial = ++view._loadSerial;
+
+        this._loadContent(path, view._pixelSize).then(content => {
+            if (serial !== view._loadSerial || this._cancellable.is_cancelled())
+                return;
+            this._showContent(view, content, animate);
+        }).catch(e => {
+            if (!isCancelled(e))
+                logWarn(`Failed to load image "${path}": ${e.message ?? e}`);
+        });
+    }
+
+    _showContent(view, content, animate) {
         const layer = new St.Widget({
             x_expand: true,
             y_expand: true,
-            style: this._style(path, width, height),
+            content,
+            content_gravity: this._scalingMode === ScalingMode.FIT
+                ? Clutter.ContentGravity.RESIZE_ASPECT
+                : Clutter.ContentGravity.RESIZE_FILL,
         });
         const old = view._layer;
         view._layer = layer;
@@ -88,7 +275,9 @@ export class Slideshow {
             opacity: 255,
             duration: this._fadeDuration,
             mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
-            onComplete: () => old.destroy(),
+            // onStopped also fires if the fade is interrupted, so the
+            // previous layer (and its texture) is always released.
+            onStopped: () => old.destroy(),
         });
     }
 
@@ -129,6 +318,8 @@ export class Slideshow {
 
     destroy() {
         this.pause();
+        this._cancellable.cancel();
+        this._pendingLoads.clear();
         this._views = [];
     }
 }
